@@ -10,7 +10,7 @@ A scalable system that collects assets from bug bounty programs, enumerates thei
 2. Enumerates subdomains and live web services
 3. Extracts JavaScript files and endpoints
 4. Detects technologies via [cultivate-api](https://github.com/kapeka0/cultivate-api)
-5. Stores everything in a PostgreSQL instance, so you can ask: **"Which subdomains use Next.js 13?"**
+5. Stores everything in a PostgreSQL instance, so you can ask: **"Which subdomains from which programs are using Next.js 13?"**
 
 ---
 
@@ -157,13 +157,9 @@ A web UI for browsing, filtering, and exporting discovered assets, available at 
 
 **Features:**
 
-- Search assets by domain (debounced, synced to URL)
+- Search assets by domain
 - Filter by technology, platform, program, and VDP eligibility
-- Infinite scroll with skeleton loading
-- Export all matching domains to `.txt` (respects active filters, fetches full result set)
-- Dark / light theme toggle
-
-**Stack:** Next.js 15 · Tailwind CSS · shadcn/ui · SWR · nuqs · Drizzle ORM (direct DB access)
+- Export all matching domains to `.txt`
 
 ---
 
