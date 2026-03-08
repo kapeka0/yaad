@@ -2,6 +2,7 @@ FROM node:20-slim
 
 # Install Chromium dependencies for Puppeteer
 RUN apt-get update && apt-get install -y \
+    chromium \
     wget \
     gnupg \
     ca-certificates \
@@ -45,10 +46,12 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
+ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+
 RUN git clone https://github.com/kapeka0/cultivate-api.git . && \
     npm install
 
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=false
 ENV PORT=3000
 
 EXPOSE 3000
