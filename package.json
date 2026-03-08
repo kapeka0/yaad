@@ -1,0 +1,13 @@
+{
+  "name": "yaad",
+  "private": true,
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev": "docker compose up --build",
+    "db:generate": "pnpm --filter @yaad/db db:generate",
+    "db:migrate": "pnpm --filter @yaad/db db:migrate"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  }
+}
