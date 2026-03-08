@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db as getDbInstance } from "@/lib/db";
 import { assets, scopes, programs, technologies, assetTechnologies } from "@yaad/db";
-import { eq, ilike, gt, and, inArray } from "drizzle-orm";
+import { eq, ilike, gt, and, inArray, sql } from "drizzle-orm";
 
 export const runtime = "nodejs";
 
@@ -35,6 +35,31 @@ export async function GET(req: NextRequest) {
   if (program) conditions.push(eq(programs.name, program));
   if (excludeVdp) conditions.push(eq(programs.offersReward, true));
 
+  // COUNT query (same filters, no cursor)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const countConditions: any[] = [];
+  if (q) countConditions.push(ilike(assets.domain, `%${q}%`));
+  if (platform) countConditions.push(eq(programs.platform, platform));
+  if (program) countConditions.push(eq(programs.name, program));
+  if (excludeVdp) countConditions.push(eq(programs.offersReward, true));
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let countQuery: any = dbInstance
+    .select({ count: sql<number>`count(*)` })
+    .from(assets)
+    .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+    .innerJoin(programs, eq(scopes.programId, programs.id))
+    .$dynamic();
+
+  if (technology) {
+    countQuery = countQuery
+      .innerJoin(assetTechnologies, eq(assetTechnologies.assetId, assets.id))
+      .innerJoin(technologies, eq(technologies.id, assetTechnologies.technologyId))
+      .where(and(...countConditions, ilike(technologies.name, `%${technology}%`)));
+  } else if (countConditions.length > 0) {
+    countQuery = countQuery.where(and(...countConditions));
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let query: any = dbInstance
     .select({
@@ -59,8 +84,12 @@ export async function GET(req: NextRequest) {
     query = query.where(and(...conditions));
   }
 
-  const rows = await query.orderBy(assets.id).limit(limit);
+  const [rows, [{ count }]] = await Promise.all([
+    query.orderBy(assets.id).limit(limit),
+    countQuery,
+  ]);
 
+  const total = Number(count);
   const assetIds = (rows as { id: number }[]).map((r) => r.id);
   const techRows: TechRow[] =
     assetIds.length > 0
@@ -97,5 +126,5 @@ export async function GET(req: NextRequest) {
   }));
 
   const nextCursor = rows.length === limit ? rows[rows.length - 1].id : null;
-  return NextResponse.json({ nextCursor, data });
+  return NextResponse.json({ nextCursor, data, total });
 }

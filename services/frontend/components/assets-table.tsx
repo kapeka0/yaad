@@ -28,6 +28,7 @@ interface Asset {
 interface Page {
   nextCursor: number | null;
   data: Asset[];
+  total: number;
 }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
@@ -74,12 +75,12 @@ export function AssetsTable() {
 
   const rows: Asset[] = data?.flatMap((p) => p.data) ?? [];
   const isEmpty = !isLoading && rows.length === 0;
-  const isDone = data ? data[data.length - 1]?.nextCursor === null : false;
+  const total = data?.[0]?.total ?? null;
 
   return (
     <div className="space-y-2">
       <div className="text-xs text-muted-foreground font-mono">
-        {isLoading ? <Skeleton className="h-3 w-24" /> : `${rows.length} assets${isDone ? "" : "+"}`}
+        {isLoading ? <Skeleton className="h-3 w-24" /> : total !== null ? `${total} assets` : `${rows.length} assets+`}
       </div>
 
       <div className="border border-border rounded-md overflow-hidden">
