@@ -144,6 +144,19 @@ services:
       cultivate-api:
         condition: service_healthy
 
+  frontend:
+    build:
+      context: .
+      dockerfile: services/frontend/Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
+      NEXT_PUBLIC_ICON_BASE_URL: ${ICON_BASE_URL:-https://zrqvcicitadfkaaklgmg.supabase.co/storage/v1/object/public/tech-icons/}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
   redis_data:

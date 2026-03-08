@@ -2,7 +2,7 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { loadConfig } from "@yaad/config";
 import { getDb, runMigrations } from "@yaad/db";
-import { sql, eq, ilike, count } from "drizzle-orm";
+import { sql, eq, ilike, count, gt, and, inArray, type SQL } from "drizzle-orm";
 import {
   programs,
   scopes,
@@ -154,6 +154,103 @@ async function bootstrap() {
       .offset(offset);
 
     return c.json({ page, limit, data: rows });
+  });
+
+  // GET /assets/search — enriched for frontend table
+  app.get("/assets/search", async (c) => {
+    const q = c.req.query("q");
+    const technology = c.req.query("technology");
+    const platform = c.req.query("platform");
+    const cursorStr = c.req.query("cursor");
+    const cursor = cursorStr ? parseInt(cursorStr, 10) : undefined;
+    const limit = Math.min(100, Math.max(1, parseInt(c.req.query("limit") ?? "30", 10)));
+
+    // Build conditions
+    const conditions: SQL[] = [];
+    if (cursor) conditions.push(gt(assets.id, cursor));
+    if (q) conditions.push(ilike(assets.domain, `%${q}%`));
+    if (platform) conditions.push(eq(programs.platform, platform));
+
+    let query = db
+      .select({
+        id: assets.id,
+        domain: assets.domain,
+        firstSeen: assets.firstSeen,
+        programId: programs.id,
+        programName: programs.name,
+        programPlatform: programs.platform,
+      })
+      .from(assets)
+      .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+      .innerJoin(programs, eq(scopes.programId, programs.id))
+      .$dynamic();
+
+    if (technology) {
+      query = query
+        .innerJoin(assetTechnologies, eq(assetTechnologies.assetId, assets.id))
+        .innerJoin(technologies, eq(technologies.id, assetTechnologies.technologyId))
+        .where(and(...conditions, ilike(technologies.name, `%${technology}%`)));
+    } else if (conditions.length > 0) {
+      query = query.where(and(...conditions));
+    }
+
+    const rows = await query.orderBy(assets.id).limit(limit);
+
+    // Fetch technologies for these assets
+    const assetIds = rows.map((r) => r.id);
+    const techRows = assetIds.length > 0
+      ? await db
+          .select({
+            assetId: assetTechnologies.assetId,
+            techId: technologies.id,
+            techName: technologies.name,
+            techVersion: technologies.version,
+            techIcon: technologies.icon,
+          })
+          .from(assetTechnologies)
+          .innerJoin(technologies, eq(technologies.id, assetTechnologies.technologyId))
+          .where(inArray(assetTechnologies.assetId, assetIds))
+      : [];
+
+    const techsByAsset = new Map<number, typeof techRows>();
+    for (const t of techRows) {
+      if (!techsByAsset.has(t.assetId)) techsByAsset.set(t.assetId, []);
+      techsByAsset.get(t.assetId)!.push(t);
+    }
+
+    const data = rows.map((r) => ({
+      id: r.id,
+      domain: r.domain,
+      firstSeen: r.firstSeen,
+      program: { id: r.programId, name: r.programName, platform: r.programPlatform },
+      technologies: (techsByAsset.get(r.id) ?? []).map((t) => ({
+        id: t.techId,
+        name: t.techName,
+        version: t.techVersion,
+        icon: t.techIcon,
+      })),
+    }));
+
+    const nextCursor = rows.length === limit ? rows[rows.length - 1].id : null;
+    return c.json({ nextCursor, data });
+  });
+
+  // GET /technologies — distinct tech names for filter combobox
+  app.get("/technologies", async (c) => {
+    const rows = await db
+      .selectDistinct({ name: technologies.name })
+      .from(technologies)
+      .orderBy(technologies.name);
+    return c.json(rows);
+  });
+
+  // GET /platforms — distinct platforms
+  app.get("/platforms", async (c) => {
+    const rows = await db
+      .selectDistinct({ platform: programs.platform })
+      .from(programs)
+      .orderBy(programs.platform);
+    return c.json(rows.map((r) => r.platform));
   });
 
   // GET /scopes?program=name

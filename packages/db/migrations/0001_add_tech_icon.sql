@@ -1,0 +1,1 @@
+ALTER TABLE technologies ADD COLUMN IF NOT EXISTS icon text NOT NULL DEFAULT '';

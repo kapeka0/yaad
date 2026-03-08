@@ -13,6 +13,7 @@ export const programs = pgTable("programs", {
   id: serial("id").primaryKey(),
   name: text("name").notNull().unique(),
   platform: text("platform").notNull(),
+  offersReward: boolean("offers_reward").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -81,6 +82,7 @@ export const technologies = pgTable(
     id: serial("id").primaryKey(),
     name: text("name").notNull(),
     version: text("version").notNull().default(""),
+    icon: text("icon").notNull().default(""),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (t) => ({

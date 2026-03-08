@@ -18,6 +18,7 @@ function normalizeScope(asset: string, type: string, inScope: boolean): Normaliz
 function parseHackerOne(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
     name: string;
+    offers_bounties?: boolean;
     targets?: {
       in_scope?: Array<{ asset_identifier: string; asset_type: string }>;
       out_of_scope?: Array<{ asset_identifier: string; asset_type: string }>;
@@ -27,6 +28,7 @@ function parseHackerOne(data: unknown): NormalizedProgram[] {
   return programs.map((p) => ({
     programName: p.name,
     platform: "hackerone",
+    offersReward: p.offers_bounties ?? true,
     scopes: [
       ...(p.targets?.in_scope ?? []).map((s) =>
         normalizeScope(s.asset_identifier, s.asset_type, true)
@@ -42,6 +44,7 @@ function parseHackerOne(data: unknown): NormalizedProgram[] {
 function parseBugcrowd(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
     name: string;
+    offers_bounties?: boolean;
     targets?: {
       in_scope?: Array<{ target: string; type: string }>;
       out_of_scope?: Array<{ target: string; type: string }>;
@@ -51,6 +54,7 @@ function parseBugcrowd(data: unknown): NormalizedProgram[] {
   return programs.map((p) => ({
     programName: p.name,
     platform: "bugcrowd",
+    offersReward: p.offers_bounties ?? true,
     scopes: [
       ...(p.targets?.in_scope ?? []).map((s) =>
         normalizeScope(s.target, s.type, true)
@@ -66,6 +70,7 @@ function parseBugcrowd(data: unknown): NormalizedProgram[] {
 function parseIntigriti(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
     name: string;
+    offers_bounties?: boolean;
     targets?: {
       in_scope?: Array<{ endpoint: string; type: string }>;
       out_of_scope?: Array<{ endpoint: string; type: string }>;
@@ -75,6 +80,7 @@ function parseIntigriti(data: unknown): NormalizedProgram[] {
   return programs.map((p) => ({
     programName: p.name,
     platform: "intigriti",
+    offersReward: p.offers_bounties ?? true,
     scopes: [
       ...(p.targets?.in_scope ?? []).map((s) =>
         normalizeScope(s.endpoint, s.type, true)
@@ -90,6 +96,7 @@ function parseIntigriti(data: unknown): NormalizedProgram[] {
 function parseYesWeHack(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
     name: string;
+    offers_bounties?: boolean;
     scopes?: Array<{ scope: string; scope_type: string }>;
     out_of_scope?: Array<{ scope: string; scope_type: string }>;
   }>;
@@ -97,6 +104,7 @@ function parseYesWeHack(data: unknown): NormalizedProgram[] {
   return programs.map((p) => ({
     programName: p.name,
     platform: "yeswehack",
+    offersReward: p.offers_bounties ?? true,
     scopes: [
       ...(p.scopes ?? []).map((s) =>
         normalizeScope(s.scope, s.scope_type, true)
@@ -112,6 +120,7 @@ function parseYesWeHack(data: unknown): NormalizedProgram[] {
 function parseFederacy(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
     name: string;
+    offers_bounties?: boolean;
     targets?: {
       in_scope?: Array<{ asset_identifier: string; asset_type: string }>;
       out_of_scope?: Array<{ asset_identifier: string; asset_type: string }>;
@@ -121,6 +130,7 @@ function parseFederacy(data: unknown): NormalizedProgram[] {
   return programs.map((p) => ({
     programName: p.name,
     platform: "federacy",
+    offersReward: p.offers_bounties ?? true,
     scopes: [
       ...(p.targets?.in_scope ?? []).map((s) =>
         normalizeScope(s.asset_identifier, s.asset_type, true)

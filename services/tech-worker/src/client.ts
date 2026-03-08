@@ -1,6 +1,7 @@
 export interface DetectedTech {
   name: string;
   version: string;
+  icon: string;
 }
 
 export async function detectTechnologies(
@@ -23,6 +24,7 @@ export async function detectTechnologies(
     technologies?: Array<{
       name: string;
       version?: string;
+      icon?: string;
       confidence?: number;
     }>;
   };
@@ -32,5 +34,6 @@ export async function detectTechnologies(
     .map((t) => ({
       name: t.name,
       version: t.version ?? "",
+      icon: t.icon ?? "",
     }));
 }

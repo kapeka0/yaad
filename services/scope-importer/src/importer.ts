@@ -15,10 +15,10 @@ export async function importPrograms(
     // Upsert program
     const [program] = await db
       .insert(programs)
-      .values({ name: prog.programName, platform: prog.platform })
+      .values({ name: prog.programName, platform: prog.platform, offersReward: prog.offersReward ?? true })
       .onConflictDoUpdate({
         target: programs.name,
-        set: { platform: prog.platform },
+        set: { platform: prog.platform, offersReward: prog.offersReward ?? true },
       })
       .returning();
 

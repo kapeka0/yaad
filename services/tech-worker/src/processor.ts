@@ -2,6 +2,7 @@ import type { Db } from "@yaad/db";
 import { technologies, assetTechnologies } from "@yaad/db";
 import type { DetectTechnologyJob } from "@yaad/queue";
 import { detectTechnologies } from "./client.js";
+import { sql } from "drizzle-orm";
 
 export async function processDetectTechnology(
   job: { data: DetectTechnologyJob },
@@ -19,17 +20,14 @@ export async function processDetectTechnology(
     try {
       const [technology] = await db
         .insert(technologies)
-        .values({ name: tech.name, version: tech.version })
-        .onConflictDoNothing()
+        .values({ name: tech.name, version: tech.version ?? "", icon: tech.icon ?? "" })
+        .onConflictDoUpdate({
+          target: [technologies.name, technologies.version],
+          set: { icon: sql`excluded.icon` },
+        })
         .returning();
 
-      // If onConflictDoNothing returned nothing, fetch the existing row
-      const techId = technology?.id ?? await (async () => {
-        const existing = await db.query.technologies.findFirst({
-          where: (t, { and, eq }) => and(eq(t.name, tech.name), eq(t.version, tech.version)),
-        });
-        return existing?.id;
-      })();
+      const techId = technology?.id;
 
       if (techId) {
         await db

@@ -6,6 +6,7 @@ export interface CultivateApiResponse {
 export interface CultivateTechnology {
   name: string;
   version?: string;
+  icon?: string;
   confidence: number;
   categories?: string[];
 }
@@ -36,5 +37,6 @@ export interface NormalizedScope {
 export interface NormalizedProgram {
   programName: string;
   platform: string;
+  offersReward?: boolean;
   scopes: NormalizedScope[];
 }
