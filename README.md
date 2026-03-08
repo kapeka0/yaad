@@ -2,7 +2,7 @@
 
 A scalable system that collects assets from bug bounty programs, enumerates their infrastructure, detects technologies, and lets you query which programs are affected when a CVE drops.
 
----
+![](./image.png)
 
 ## What It Does
 
