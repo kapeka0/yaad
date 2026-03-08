@@ -46,16 +46,17 @@ A scalable system that collects assets from bug bounty programs, enumerates thei
 
 ## Services
 
-| Service | Role | Key Tool |
-|---|---|---|
-| `scope-importer` | Pull bounty-targets-data, parse scopes, seed DB | GitHub raw JSON |
-| `subdomain-worker` | Enumerate subdomains | subfinder |
-| `httpx-worker` | Identify live HTTP services | httpx |
-| `js-worker` | Collect JavaScript files | getJS |
-| `endpoint-worker` | Extract endpoints + subdomains from JS | linkfinder |
-| `tech-worker` | Detect technologies per asset | cultivate-api |
-| `api` | REST API for querying the database | Hono |
-| `cultivate-api` | Technology fingerprinting service | Wappalyzer-based |
+| Service            | Role                                            | Key Tool         |
+| ------------------ | ----------------------------------------------- | ---------------- |
+| `scope-importer`   | Pull bounty-targets-data, parse scopes, seed DB | GitHub raw JSON  |
+| `subdomain-worker` | Enumerate subdomains                            | subfinder        |
+| `httpx-worker`     | Identify live HTTP services                     | httpx            |
+| `js-worker`        | Collect JavaScript files                        | getJS            |
+| `endpoint-worker`  | Extract endpoints + subdomains from JS          | linkfinder       |
+| `tech-worker`      | Detect technologies per asset                   | cultivate-api    |
+| `api`              | REST API for querying the database              | Hono             |
+| `frontend`         | Web UI for browsing and exporting assets        | Next.js 15       |
+| `cultivate-api`    | Technology fingerprinting service               | Wappalyzer-based |
 
 ---
 
@@ -96,31 +97,32 @@ A scalable system that collects assets from bug bounty programs, enumerates thei
 
 ## Database Schema
 
-| Table | Description |
-|---|---|
-| `programs` | Bug bounty program names and platforms |
-| `scopes` | Raw scope entries per program |
-| `assets` | Discovered domains/subdomains |
-| `web_services` | Live HTTP services with status and title |
-| `javascript_files` | JS file URLs per service |
-| `endpoints` | Endpoints extracted from JS files |
-| `technologies` | Unique technology + version records |
-| `asset_technologies` | Many-to-many: assets ↔ technologies |
+| Table                | Description                              |
+| -------------------- | ---------------------------------------- |
+| `programs`           | Bug bounty program names and platforms   |
+| `scopes`             | Raw scope entries per program            |
+| `assets`             | Discovered domains/subdomains            |
+| `web_services`       | Live HTTP services with status and title |
+| `javascript_files`   | JS file URLs per service                 |
+| `endpoints`          | Endpoints extracted from JS files        |
+| `technologies`       | Unique technology + version records      |
+| `asset_technologies` | Many-to-many: assets ↔ technologies      |
 
 ---
 
 ## Tech Stack
 
-| Layer | Technology |
-|---|---|
-| Language | TypeScript (strict) |
-| Runtime | Node.js |
-| Database | PostgreSQL |
-| ORM | Drizzle ORM |
-| Queue | BullMQ + Redis |
-| API Framework | Hono |
+| Layer            | Technology              |
+| ---------------- | ----------------------- |
+| Language         | TypeScript (strict)     |
+| Runtime          | Node.js                 |
+| Database         | PostgreSQL              |
+| ORM              | Drizzle ORM             |
+| Queue            | BullMQ + Redis          |
+| API Framework    | Hono                    |
+| Frontend         | Next.js 15 + Tailwind   |
 | Containerization | Docker + Docker Compose |
-| Package Manager | pnpm (monorepo) |
+| Package Manager  | pnpm (monorepo)         |
 
 ---
 
@@ -145,34 +147,51 @@ docker compose up -d
 ```
 
 The API will be available at `http://localhost:3000`.
+The frontend will be available at `http://localhost:3001`.
+
+---
+
+## Frontend
+
+A web UI for browsing, filtering, and exporting discovered assets, available at `http://localhost:3001`.
+
+**Features:**
+
+- Search assets by domain (debounced, synced to URL)
+- Filter by technology, platform, program, and VDP eligibility
+- Infinite scroll with skeleton loading
+- Export all matching domains to `.txt` (respects active filters, fetches full result set)
+- Dark / light theme toggle
+
+**Stack:** Next.js 15 · Tailwind CSS · shadcn/ui · SWR · nuqs · Drizzle ORM (direct DB access)
 
 ---
 
 ## API Endpoints
 
-| Method | Path | Description |
-|---|---|---|
-| `GET` | `/assets/by-technology?name=Next.js` | Assets using a technology |
-| `GET` | `/assets/by-technology?name=Next.js&version=13` | Assets using specific version |
-| `GET` | `/programs/:id/assets` | All assets for a program |
-| `GET` | `/assets/:domain/subdomains` | Subdomains of a target |
-| `GET` | `/programs/by-technology?name=Apache` | Programs affected by a technology |
-| `GET` | `/assets/:domain/technologies` | Technologies detected on an asset |
-| `GET` | `/health` | Health check |
+| Method | Path                                            | Description                       |
+| ------ | ----------------------------------------------- | --------------------------------- |
+| `GET`  | `/assets/by-technology?name=Next.js`            | Assets using a technology         |
+| `GET`  | `/assets/by-technology?name=Next.js&version=13` | Assets using specific version     |
+| `GET`  | `/programs/:id/assets`                          | All assets for a program          |
+| `GET`  | `/assets/:domain/subdomains`                    | Subdomains of a target            |
+| `GET`  | `/programs/by-technology?name=Apache`           | Programs affected by a technology |
+| `GET`  | `/assets/:domain/technologies`                  | Technologies detected on an asset |
+| `GET`  | `/health`                                       | Health check                      |
 
 ---
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|---|---|---|
-| `DATABASE_URL` | `postgresql://yaad:yaad@localhost:5432/yaad` | PostgreSQL connection string |
-| `REDIS_URL` | `redis://localhost:6379` | Redis connection string |
-| `CULTIVATE_API_URL` | `http://cultivate-api:3000` | Tech detection service URL |
-| `LOG_LEVEL` | `info` | Log verbosity (`debug`, `info`, `warn`, `error`) |
-| `CONFIDENCE_THRESHOLD` | `50` | Min confidence (0–100) to store a detected technology |
-| `WORKER_CONCURRENCY` | `5` | Concurrent jobs per worker |
-| `TECH_WORKER_CONCURRENCY` | `3` | Concurrent jobs for tech detection |
-| `PORT` | `3000` | API server port |
-| `PDCP_API_KEY` | _(optional)_ | ProjectDiscovery Cloud API key for enhanced enumeration |
-‣慹摡਍
+| Variable                  | Default                                      | Description                                             |
+| ------------------------- | -------------------------------------------- | ------------------------------------------------------- |
+| `DATABASE_URL`            | `postgresql://yaad:yaad@localhost:5432/yaad` | PostgreSQL connection string                            |
+| `REDIS_URL`               | `redis://localhost:6379`                     | Redis connection string                                 |
+| `CULTIVATE_API_URL`       | `http://cultivate-api:3000`                  | Tech detection service URL                              |
+| `LOG_LEVEL`               | `info`                                       | Log verbosity (`debug`, `info`, `warn`, `error`)        |
+| `CONFIDENCE_THRESHOLD`    | `50`                                         | Min confidence (0–100) to store a detected technology   |
+| `WORKER_CONCURRENCY`      | `5`                                          | Concurrent jobs per worker                              |
+| `TECH_WORKER_CONCURRENCY` | `3`                                          | Concurrent jobs for tech detection                      |
+| `PORT`                    | `3000`                                       | API server port                                         |
+| `FRONTEND_PORT`           | `3001`                                       | Frontend server port                                    |
+| `PDCP_API_KEY`            | _(optional)_                                 | ProjectDiscovery Cloud API key for enhanced enumeration |

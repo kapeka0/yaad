@@ -36,7 +36,15 @@ export async function processEnumerateSubdomains(
     JSON.stringify({ level: "info", msg: `Found ${allSubdomains.size} subdomains for ${domain}` })
   );
 
-  for (const subdomain of allSubdomains) {
+  for (const rawSubdomain of allSubdomains) {
+    const subdomain = (() => {
+      try {
+        if (rawSubdomain.startsWith("http://") || rawSubdomain.startsWith("https://")) {
+          return new URL(rawSubdomain).hostname;
+        }
+      } catch { /* ignore */ }
+      return rawSubdomain;
+    })();
     try {
       const [inserted] = await db
         .insert(assets)

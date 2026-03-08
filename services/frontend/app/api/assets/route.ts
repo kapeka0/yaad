@@ -19,7 +19,8 @@ export async function GET(req: NextRequest) {
   const technology = searchParams.get("technology") ?? undefined;
   const platform = searchParams.get("platform") ?? undefined;
   const program = searchParams.get("program") ?? undefined;
-  const excludeVdp = searchParams.get("excludeVdp") === "1";
+  const excludeVdpRaw = searchParams.get("excludeVdp");
+  const excludeVdp = excludeVdpRaw === "1" || excludeVdpRaw === "true";
   const cursorStr = searchParams.get("cursor") ?? undefined;
   const cursor = cursorStr ? parseInt(cursorStr, 10) : undefined;
   const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") ?? "30", 10)));

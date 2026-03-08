@@ -1,6 +1,7 @@
 import { Navbar } from "@/components/navbar";
 import type { Metadata } from "next";
 import { ThemeProvider } from "next-themes";
+import { NuqsAdapter } from "nuqs/adapters/next/app";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -19,16 +20,18 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className="min-h-screen bg-background font-mono antialiased">
-        <ThemeProvider
-          attribute="class"
-          defaultTheme="dark"
-          enableSystem={false}
-        >
-          <Navbar />
-          <main className="container mx-auto px-4 py-6 max-w-7xl">
-            {children}
-          </main>
-        </ThemeProvider>
+        <NuqsAdapter>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="dark"
+            enableSystem={false}
+          >
+            <Navbar />
+            <main className="container mx-auto px-4 py-6 max-w-7xl">
+              {children}
+            </main>
+          </ThemeProvider>
+        </NuqsAdapter>
       </body>
     </html>
   );

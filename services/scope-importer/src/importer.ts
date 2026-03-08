@@ -5,6 +5,15 @@ import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
 import type { EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
 import type { NormalizedProgram } from "@yaad/types";
 
+function normalizeAssetDomain(raw: string): string {
+  try {
+    if (raw.startsWith("http://") || raw.startsWith("https://")) {
+      return new URL(raw).hostname;
+    }
+  } catch { /* not a valid URL, use as-is */ }
+  return raw;
+}
+
 export async function importPrograms(
   db: Db,
   normalizedPrograms: NormalizedProgram[],
@@ -60,11 +69,12 @@ export async function importPrograms(
         if (!isDomain) continue;
 
         // Non-wildcard domain: upsert asset and enqueue scan_http
+        const domain = normalizeAssetDomain(scope.asset);
         const [asset] = await db
           .insert(assets)
           .values({
             scopeId: insertedScope.id,
-            domain: scope.asset,
+            domain,
           })
           .onConflictDoUpdate({
             target: assets.domain,
@@ -75,7 +85,7 @@ export async function importPrograms(
         if (asset) {
           await scanQueue.add(
             "scan_http",
-            { domain: scope.asset, assetId: asset.id },
+            { domain, assetId: asset.id },
             DEFAULT_JOB_OPTIONS
           );
         }

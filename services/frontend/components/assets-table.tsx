@@ -5,7 +5,10 @@ import { useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { useInView } from "react-intersection-observer";
 import useSWRInfinite from "swr/infinite";
+import { Skeleton } from "./ui/skeleton";
 import { TechIcons } from "./tech-icons";
+
+const SKELETON_WIDTHS = ["w-full","w-10/12","w-9/12","w-8/12","w-7/12","w-6/12","w-5/12","w-4/12"];
 
 interface Tech {
   id: number;
@@ -76,28 +79,36 @@ export function AssetsTable() {
   return (
     <div className="space-y-2">
       <div className="text-xs text-muted-foreground font-mono">
-        {isLoading ? "Loading..." : `${rows.length} assets${isDone ? "" : "+"}`}
+        {isLoading ? <Skeleton className="h-3 w-24" /> : `${rows.length} assets${isDone ? "" : "+"}`}
       </div>
 
       <div className="border border-border rounded-md overflow-hidden">
-        <table className="w-full text-xs font-mono">
+        <table className="w-full text-xs font-mono table-fixed">
           <thead>
             <tr className="border-b border-border bg-muted/40">
-              <th className="text-left px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider text-[10px]">
+              <th className="text-left px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider text-[10px] w-[35%]">
                 Subdomain
               </th>
-              <th className="text-left px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider text-[10px]">
+              <th className="text-left px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider text-[10px] w-[30%]">
                 Program
               </th>
-              <th className="text-left px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider text-[10px]">
+              <th className="text-left px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider text-[10px] w-[20%]">
                 Technologies
               </th>
-              <th className="text-left px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider text-[10px]">
+              <th className="text-left px-3 py-2 font-medium text-muted-foreground uppercase tracking-wider text-[10px] w-[15%]">
                 First Seen
               </th>
             </tr>
           </thead>
           <tbody>
+            {isLoading && SKELETON_WIDTHS.map((w, i) => (
+              <tr key={i} className="border-b border-border last:border-0">
+                <td className="px-3 py-2"><Skeleton className={cn("h-3", w)} /></td>
+                <td className="px-3 py-2"><Skeleton className="h-3 w-7/12" /></td>
+                <td className="px-3 py-2"><Skeleton className="h-3 w-4/12" /></td>
+                <td className="px-3 py-2"><Skeleton className="h-3 w-5/12" /></td>
+              </tr>
+            ))}
             {isEmpty && (
               <tr>
                 <td
@@ -116,7 +127,9 @@ export function AssetsTable() {
                   "hover:bg-muted/30 transition-colors",
                 )}
               >
-                <td className="px-3 py-2 text-foreground">{asset.domain}</td>
+                <td className="px-3 py-2 text-foreground max-w-xs">
+                  <span className="block truncate" title={asset.domain}>{asset.domain}</span>
+                </td>
                 <td className="px-3 py-2">
                   <span className="text-muted-foreground">
                     {asset.program.name}
@@ -149,8 +162,8 @@ export function AssetsTable() {
         className="py-2 text-center text-xs text-muted-foreground"
       >
         {isValidating && size > 1 && "Loading more..."}
-        {isDone && rows.length > 0 && ""}
       </div>
+
     </div>
   );
 }
