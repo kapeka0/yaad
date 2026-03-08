@@ -8,6 +8,7 @@
     "db:migrate": "pnpm --filter @yaad/db db:migrate"
   },
   "devDependencies": {
+    "postgres": "^3.4.8",
     "typescript": "^5.4.5"
   }
 }

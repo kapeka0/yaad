@@ -1,6 +1,6 @@
 # Yet Another Asset Database (YAAD)
 
-A scalable system that collects assets from bug bounty programs, enumerates their infrastructure, detects technologies, and lets you query which programs are affected when a CVE drops.
+A scalable system that collects assets from bug bounty programs, enumerates their infrastructure, detects technologies, and lets you query subdomains by technology to see which programs are affected when a CVE drops.
 
 ![](./image.png)
 
@@ -10,7 +10,7 @@ A scalable system that collects assets from bug bounty programs, enumerates thei
 2. Enumerates subdomains and live web services
 3. Extracts JavaScript files and endpoints
 4. Detects technologies via [cultivate-api](https://github.com/kapeka0/cultivate-api)
-5. Stores everything in PostgreSQL so you can ask: **"Which programs use Next.js 13?"**
+5. Stores everything in a PostgreSQL instance, so you can ask: **"Which subdomains use Next.js 13?"**
 
 ---
 
