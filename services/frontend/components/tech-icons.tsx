@@ -59,8 +59,9 @@ export function TechIcons({ techs }: { techs: Tech[] }) {
   if (!techs.length)
     return <span className="text-muted-foreground text-xs">—</span>;
 
-  const visible = techs.slice(0, MAX_VISIBLE);
-  const rest = techs.slice(MAX_VISIBLE);
+  const sorted = [...techs].sort((a, b) => (b.icon ? 1 : 0) - (a.icon ? 1 : 0));
+  const visible = sorted.slice(0, MAX_VISIBLE);
+  const rest = sorted.slice(MAX_VISIBLE);
 
   return (
     <div className="flex items-center gap-1 flex-wrap">

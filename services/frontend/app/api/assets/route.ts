@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let countQuery: any = dbInstance
-    .select({ count: sql<number>`count(*)` })
+    .select({ count: sql<number>`count(distinct ${assets.id})` })
     .from(assets)
     .innerJoin(scopes, eq(assets.scopeId, scopes.id))
     .innerJoin(programs, eq(scopes.programId, programs.id))
@@ -62,7 +62,7 @@ export async function GET(req: NextRequest) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let query: any = dbInstance
-    .select({
+    .selectDistinct({
       id: assets.id,
       domain: assets.domain,
       firstSeen: assets.firstSeen,

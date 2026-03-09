@@ -44,6 +44,7 @@ export function AssetsTable() {
   const searchParams = useSearchParams();
   const filterKey = searchParams.toString();
   const prevFilterKey = useRef(filterKey);
+  const isResetting = useRef(false);
 
   const { data, size, setSize, isLoading, isValidating } = useSWRInfinite<Page>(
     (pageIndex, prev: Page | null) => {
@@ -60,6 +61,7 @@ export function AssetsTable() {
   useEffect(() => {
     if (filterKey !== prevFilterKey.current) {
       prevFilterKey.current = filterKey;
+      isResetting.current = true;
       void setSize(1);
     }
   }, [filterKey, setSize]);
@@ -67,6 +69,10 @@ export function AssetsTable() {
   const { ref: sentinelRef, inView } = useInView({ threshold: 0 });
 
   useEffect(() => {
+    if (isResetting.current) {
+      isResetting.current = false;
+      return;
+    }
     if (inView && !isValidating && data) {
       const last = data[data.length - 1];
       if (last?.nextCursor !== null) setSize((s) => s + 1);
