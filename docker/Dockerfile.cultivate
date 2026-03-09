@@ -47,10 +47,21 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
+ENV PUPPETEER_LAUNCH_ARGS="--no-sandbox --disable-dev-shm-usage --disable-gpu"
+
+# Detect Chromium path (handles both chromium and chromium-browser on ARM)
+RUN which chromium || which chromium-browser || echo "chromium not found"
+RUN ln -sf $(which chromium-browser 2>/dev/null || which chromium) /usr/bin/chromium 2>/dev/null || true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
 RUN git clone https://github.com/kapeka0/cultivate-api.git . && \
-    npm install
+    npm install && \
+    find . -name "*.js" -not -path "*/node_modules/*" | \
+      xargs grep -l "puppeteer\.launch\|browser\.launch" 2>/dev/null | \
+      xargs sed -i "s/puppeteer\.launch({/puppeteer.launch({ args: ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu'],/g" 2>/dev/null || true && \
+    find . -name "*.js" -not -path "*/node_modules/*" | \
+      xargs grep -l "puppeteer\.launch\|browser\.launch" 2>/dev/null | \
+      xargs sed -i "s/puppeteer\.launch()/puppeteer.launch({ args: ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu'] })/g" 2>/dev/null || true
 
 ENV PORT=3000
 

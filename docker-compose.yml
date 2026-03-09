@@ -29,6 +29,7 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.cultivate
+    shm_size: '256m'
     environment:
       PORT: 3000
     healthcheck:
