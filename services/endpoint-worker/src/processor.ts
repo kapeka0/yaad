@@ -46,10 +46,7 @@ export async function processAnalyzeJs(
         const [asset] = await db
           .insert(assets)
           .values({ scopeId: null, domain: hostname })
-          .onConflictDoUpdate({
-            target: assets.domain,
-            set: { lastSeen: new Date() },
-          })
+          .onConflictDoNothing()
           .returning();
 
         if (asset) {

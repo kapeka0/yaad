@@ -76,10 +76,7 @@ export async function importPrograms(
             scopeId: insertedScope.id,
             domain,
           })
-          .onConflictDoUpdate({
-            target: assets.domain,
-            set: { lastSeen: new Date(), scopeId: insertedScope.id },
-          })
+          .onConflictDoNothing()
           .returning();
 
         if (asset) {

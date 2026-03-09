@@ -49,10 +49,7 @@ export async function processEnumerateSubdomains(
       const [inserted] = await db
         .insert(assets)
         .values({ scopeId, domain: subdomain })
-        .onConflictDoUpdate({
-          target: assets.domain,
-          set: { lastSeen: new Date() },
-        })
+        .onConflictDoNothing()
         .returning();
 
       if (inserted) {
