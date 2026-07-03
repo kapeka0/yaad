@@ -1,4 +1,4 @@
-// File: C:\Users\karim\Desktop\Projects\yaad\services\frontend\app\api\assets\route.ts
+// File: C:\Users\karim\Github\yaad\services\frontend\app\api\assets\route.ts
 import * as entry from '../../../../../app/api/assets/route.js'
 import type { NextRequest } from 'next/server.js'
 

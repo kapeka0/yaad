@@ -2,7 +2,8 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { loadConfig } from "@yaad/config";
 import { getDb, runMigrations } from "@yaad/db";
-import { sql, eq, ilike, count, gt, and, inArray, type SQL } from "drizzle-orm";
+import { BlobStore, type Compression } from "@yaad/storage";
+import { sql, eq, ilike, count, gt, and, inArray, isNotNull, desc, type SQL } from "drizzle-orm";
 import {
   programs,
   scopes,
@@ -10,6 +11,9 @@ import {
   technologies,
   assetTechnologies,
   webServices,
+  javascriptFiles,
+  jsLibraries,
+  jsBlobs,
 } from "@yaad/db";
 
 const config = loadConfig();
@@ -280,6 +284,156 @@ async function bootstrap() {
 
     const rows = await db.select().from(scopes).limit(limit).offset(offset);
     return c.json({ page, limit, data: rows });
+  });
+
+  // GET /libraries — distinct detected JS libraries (optionally filter ?name=)
+  app.get("/libraries", async (c) => {
+    const name = c.req.query("name");
+    const rows = await db
+      .select({
+        name: jsLibraries.name,
+        version: jsLibraries.version,
+        occurrences: count(jsLibraries.id),
+      })
+      .from(jsLibraries)
+      .where(name ? ilike(jsLibraries.name, `%${name}%`) : undefined)
+      .groupBy(jsLibraries.name, jsLibraries.version)
+      .orderBy(jsLibraries.name, jsLibraries.version);
+    return c.json(rows);
+  });
+
+  // GET /libraries/vulnerable — libraries with known CVEs (CVE hunting entrypoint)
+  app.get("/libraries/vulnerable", async (c) => {
+    const rows = await db
+      .selectDistinct({
+        name: jsLibraries.name,
+        version: jsLibraries.version,
+        severity: jsLibraries.severity,
+        vulnerabilities: jsLibraries.vulnerabilities,
+      })
+      .from(jsLibraries)
+      .where(isNotNull(jsLibraries.vulnerabilities))
+      .orderBy(jsLibraries.name, jsLibraries.version);
+    return c.json(rows);
+  });
+
+  // GET /libraries/:name/assets?version=X — assets/programs using a library.
+  // This is the core "a CVE dropped for lib X — who is affected?" query.
+  app.get("/libraries/:name/assets", async (c) => {
+    const name = c.req.param("name");
+    const version = c.req.query("version");
+    const { page, limit, offset } = parsePagination(c.req.query("page"), c.req.query("limit"));
+
+    const conditions: SQL[] = [ilike(jsLibraries.name, name)];
+    if (version) conditions.push(eq(jsLibraries.version, version));
+
+    const rows = await db
+      .selectDistinct({
+        assetId: assets.id,
+        domain: assets.domain,
+        library: jsLibraries.name,
+        version: jsLibraries.version,
+        jsUrl: javascriptFiles.url,
+        programId: programs.id,
+        programName: programs.name,
+        platform: programs.platform,
+      })
+      .from(jsLibraries)
+      .innerJoin(javascriptFiles, eq(javascriptFiles.id, jsLibraries.jsId))
+      .innerJoin(webServices, eq(webServices.id, javascriptFiles.serviceId))
+      .innerJoin(assets, eq(assets.id, webServices.assetId))
+      .leftJoin(scopes, eq(scopes.id, assets.scopeId))
+      .leftJoin(programs, eq(programs.id, scopes.programId))
+      .where(and(...conditions))
+      .orderBy(assets.domain)
+      .limit(limit)
+      .offset(offset);
+
+    return c.json({ page, limit, data: rows });
+  });
+
+  // GET /assets/:id/libraries — JS libraries detected on an asset
+  app.get("/assets/:id/libraries", async (c) => {
+    const id = parseInt(c.req.param("id"), 10);
+    const rows = await db
+      .selectDistinct({
+        name: jsLibraries.name,
+        version: jsLibraries.version,
+        severity: jsLibraries.severity,
+        vulnerabilities: jsLibraries.vulnerabilities,
+        jsUrl: javascriptFiles.url,
+      })
+      .from(jsLibraries)
+      .innerJoin(javascriptFiles, eq(javascriptFiles.id, jsLibraries.jsId))
+      .innerJoin(webServices, eq(webServices.id, javascriptFiles.serviceId))
+      .where(eq(webServices.assetId, id));
+    return c.json(rows);
+  });
+
+  // GET /js/grep?q=<regex>&limit=N — scan stored JS bodies for an arbitrary
+  // signature. Slower than the structured library search; meant for ad-hoc hunts.
+  app.get("/js/grep", async (c) => {
+    const q = c.req.query("q");
+    if (!q) return c.json({ error: "q (pattern) is required" }, 400);
+    let re: RegExp;
+    try {
+      re = new RegExp(q, "i");
+    } catch {
+      return c.json({ error: "invalid regex" }, 400);
+    }
+    const limit = Math.min(2000, Math.max(1, parseInt(c.req.query("limit") ?? "300", 10)));
+
+    // Scan the most widely-referenced unique blobs first.
+    const blobs = await db
+      .select({
+        sha256: jsBlobs.sha256,
+        storageKey: jsBlobs.storageKey,
+        compression: jsBlobs.compression,
+      })
+      .from(jsBlobs)
+      .orderBy(desc(jsBlobs.refCount))
+      .limit(limit);
+
+    const store = new BlobStore(config.storage);
+    const matched: string[] = [];
+
+    // Bounded parallelism to keep memory/network sane.
+    const pool = 8;
+    for (let i = 0; i < blobs.length; i += pool) {
+      const slice = blobs.slice(i, i + pool);
+      const checks = await Promise.all(
+        slice.map(async (b) => {
+          try {
+            const buf = await store.get(b.storageKey, b.compression as Compression);
+            return re.test(buf.toString("utf-8")) ? b.sha256 : null;
+          } catch {
+            return null;
+          }
+        })
+      );
+      for (const m of checks) if (m) matched.push(m);
+    }
+
+    if (matched.length === 0) {
+      return c.json({ scanned: blobs.length, matches: [] });
+    }
+
+    // Map matching blobs back to the assets/JS files that serve them.
+    const hits = await db
+      .selectDistinct({
+        sha256: javascriptFiles.sha256,
+        jsUrl: javascriptFiles.url,
+        domain: assets.domain,
+        programName: programs.name,
+      })
+      .from(javascriptFiles)
+      .innerJoin(webServices, eq(webServices.id, javascriptFiles.serviceId))
+      .innerJoin(assets, eq(assets.id, webServices.assetId))
+      .leftJoin(scopes, eq(scopes.id, assets.scopeId))
+      .leftJoin(programs, eq(programs.id, scopes.programId))
+      .where(inArray(javascriptFiles.sha256, matched));
+
+    return c.json({ scanned: blobs.length, matchedBlobs: matched.length, matches: hits });
   });
 
   serve({ fetch: app.fetch, port: config.port }, () => {

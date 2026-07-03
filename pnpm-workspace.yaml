@@ -1,3 +1,13 @@
 packages:
   - "packages/*"
   - "services/*"
+
+# pnpm 11 aborts `install` when dependencies with build scripts are left
+# unapproved (ERR_PNPM_IGNORED_BUILDS). Approve the known ones so Docker builds
+# (which run the latest pnpm) don't abort. This file is copied into every image.
+allowBuilds:
+  es5-ext: true
+  esbuild: true
+  msgpackr-extract: true
+  sharp: true
+  unrs-resolver: true

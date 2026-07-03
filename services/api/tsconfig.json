@@ -6,7 +6,8 @@
   },
   "references": [
     { "path": "../../packages/config" },
-    { "path": "../../packages/db" }
+    { "path": "../../packages/db" },
+    { "path": "../../packages/storage" }
   ],
   "include": ["src"]
 }

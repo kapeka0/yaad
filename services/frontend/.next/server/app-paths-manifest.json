@@ -1,6 +1,14 @@
 {
   "/_not-found/page": "app/_not-found/page.js",
+  "/api/js/grep/route": "app/api/js/grep/route.js",
   "/api/assets/export/route": "app/api/assets/export/route.js",
+  "/api/assets/bulk/route": "app/api/assets/bulk/route.js",
+  "/api/libraries/vulnerable/route": "app/api/libraries/vulnerable/route.js",
+  "/api/programs/route": "app/api/programs/route.js",
+  "/api/libraries/route": "app/api/libraries/route.js",
   "/api/assets/route": "app/api/assets/route.js",
+  "/api/programs/private/route": "app/api/programs/private/route.js",
+  "/js-hunt/page": "app/js-hunt/page.js",
+  "/programs/manage/page": "app/programs/manage/page.js",
   "/page": "app/page.js"
 }

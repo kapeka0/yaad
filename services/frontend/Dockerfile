@@ -8,6 +8,7 @@ COPY services/frontend/ ./services/frontend/
 
 RUN pnpm install --frozen-lockfile --filter frontend...
 RUN pnpm --filter @yaad/config build
+RUN pnpm --filter @yaad/queue build
 RUN pnpm --filter @yaad/db build
 RUN pnpm --filter frontend build
 

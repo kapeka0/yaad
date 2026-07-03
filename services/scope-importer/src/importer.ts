@@ -1,4 +1,5 @@
 import { Queue } from "bullmq";
+import { sql } from "drizzle-orm";
 import type { Db } from "@yaad/db";
 import { programs, scopes, assets } from "@yaad/db";
 import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
@@ -76,10 +77,15 @@ export async function importPrograms(
             scopeId: insertedScope.id,
             domain,
           })
-          .onConflictDoNothing()
-          .returning();
+          .onConflictDoUpdate({
+            target: assets.domain,
+            set: { lastSeen: new Date() },
+          })
+          .returning({ id: assets.id, isNew: sql<boolean>`(xmax = 0)` });
 
-        if (asset) {
+        // Scan newly imported roots immediately; re-imports just refresh
+        // last_seen and let the scheduler drive periodic re-scans.
+        if (asset?.isNew) {
           await scanQueue.add(
             "scan_http",
             { domain, assetId: asset.id },

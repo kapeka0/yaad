@@ -15,7 +15,11 @@ async function main(): Promise<void> {
   const worker = new Worker<EnumerateSubdomainsJob>(
     QUEUES.ENUMERATE_SUBDOMAINS,
     async (job) => {
-      await processEnumerateSubdomains(job, db, scanQueue, config.pdcpApiKey);
+      await processEnumerateSubdomains(job, db, scanQueue, {
+        pdcpApiKey: config.pdcpApiKey,
+        crtShEnabled: config.crtShEnabled,
+        gauEnabled: config.gauEnabled,
+      });
     },
     {
       connection: redisOptions,

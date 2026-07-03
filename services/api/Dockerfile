@@ -1,4 +1,5 @@
-FROM node:20-alpine AS base
+# Node 22 for built-in zstd (used to decompress stored JS blobs in /js/grep).
+FROM node:22-alpine AS base
 RUN npm install -g pnpm
 WORKDIR /app
 

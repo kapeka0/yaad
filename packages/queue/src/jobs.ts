@@ -1,6 +1,8 @@
 export interface EnumerateSubdomainsJob {
   domain: string;
-  scopeId: number;
+  scopeId: number | null;
+  // Recursion depth from the original root scope (0 = root scope asset).
+  depth?: number;
 }
 
 export interface ScanHttpJob {

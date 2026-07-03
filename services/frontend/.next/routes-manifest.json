@@ -31,6 +31,18 @@
       "regex": "^/_not\\-found(?:/)?$",
       "routeKeys": {},
       "namedRegex": "^/_not\\-found(?:/)?$"
+    },
+    {
+      "page": "/js-hunt",
+      "regex": "^/js\\-hunt(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/js\\-hunt(?:/)?$"
+    },
+    {
+      "page": "/programs/manage",
+      "regex": "^/programs/manage(?:/)?$",
+      "routeKeys": {},
+      "namedRegex": "^/programs/manage(?:/)?$"
     }
   ],
   "dataRoutes": [],

@@ -99,7 +99,7 @@
         "transform": "lodash/{{member}}"
       }
     },
-    "outputFileTracingRoot": "C:\\Users\\karim",
+    "outputFileTracingRoot": "C:\\Users\\karim\\Github\\yaad",
     "experimental": {
       "useSkewCookie": false,
       "cacheLife": {
@@ -292,11 +292,11 @@
       "postgres"
     ],
     "turbopack": {
-      "root": "C:\\Users\\karim"
+      "root": "C:\\Users\\karim\\Github\\yaad"
     }
   },
-  "appDir": "C:\\Users\\karim\\Desktop\\Projects\\yaad\\services\\frontend",
-  "relativeAppDir": "Desktop\\Projects\\yaad\\services\\frontend",
+  "appDir": "C:\\Users\\karim\\Github\\yaad\\services\\frontend",
+  "relativeAppDir": "services\\frontend",
   "files": [
     ".next\\routes-manifest.json",
     ".next\\server\\pages-manifest.json",

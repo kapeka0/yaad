@@ -2,8 +2,9 @@ import { Worker, Queue } from "bullmq";
 import { loadConfig } from "@yaad/config";
 import { getDb } from "@yaad/db";
 import { getRedisOptions, QUEUES } from "@yaad/queue";
-import type { CollectJsJob, AnalyzeJsJob } from "@yaad/queue";
-import { processCollectJs } from "./processor.js";
+import type { CollectJsJob, AnalyzeJsJob, ScanHttpJob, EnumerateSubdomainsJob } from "@yaad/queue";
+import { BlobStore } from "@yaad/storage";
+import { processCollectJs, type JsWorkerDeps } from "./processor.js";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -11,11 +12,28 @@ async function main(): Promise<void> {
   const redisOptions = getRedisOptions(config.redisUrl);
 
   const analyzeJsQueue = new Queue<AnalyzeJsJob>(QUEUES.ANALYZE_JS, { connection: redisOptions });
+  const scanQueue = new Queue<ScanHttpJob>(QUEUES.SCAN_HTTP, { connection: redisOptions });
+  const enumerateQueue = new Queue<EnumerateSubdomainsJob>(QUEUES.ENUMERATE_SUBDOMAINS, {
+    connection: redisOptions,
+  });
+
+  const store = config.storeJsBlobs ? new BlobStore(config.storage) : null;
+
+  const deps: JsWorkerDeps = {
+    db,
+    store,
+    analyzeJsQueue,
+    scanQueue,
+    enumerateQueue,
+    jsMaxBytes: config.jsMaxBytes,
+    storeJsBlobs: config.storeJsBlobs,
+    maxRecursionDepth: config.maxRecursionDepth,
+  };
 
   const worker = new Worker<CollectJsJob>(
     QUEUES.COLLECT_JS,
     async (job) => {
-      await processCollectJs(job, db, analyzeJsQueue);
+      await processCollectJs(job, deps);
     },
     {
       connection: redisOptions,

@@ -12,6 +12,7 @@
     "@hono/node-server": "^1.11.1",
     "@yaad/config": "workspace:*",
     "@yaad/db": "workspace:*",
+    "@yaad/storage": "workspace:*",
     "drizzle-orm": "^0.30.10",
     "hono": "^4.3.9"
   },

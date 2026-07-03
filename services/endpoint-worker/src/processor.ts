@@ -45,7 +45,7 @@ export async function processAnalyzeJs(
       try {
         const [asset] = await db
           .insert(assets)
-          .values({ scopeId: null, domain: hostname })
+          .values({ scopeId: null, domain: hostname, source: "js" })
           .onConflictDoNothing()
           .returning();
 

@@ -1,6 +1,14 @@
 {
   "/_not-found/page": "/_not-found",
+  "/api/js/grep/route": "/api/js/grep",
   "/api/assets/export/route": "/api/assets/export",
+  "/api/assets/bulk/route": "/api/assets/bulk",
+  "/api/libraries/vulnerable/route": "/api/libraries/vulnerable",
+  "/api/programs/route": "/api/programs",
+  "/api/libraries/route": "/api/libraries",
   "/api/assets/route": "/api/assets",
+  "/api/programs/private/route": "/api/programs/private",
+  "/js-hunt/page": "/js-hunt",
+  "/programs/manage/page": "/programs/manage",
   "/page": "/"
 }

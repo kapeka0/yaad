@@ -29,6 +29,20 @@
       "when": 1741641600000,
       "tag": "0003_dedup_assets",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1741728000000,
+      "tag": "0004_enrich_and_js_index",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1741814400000,
+      "tag": "0005_rescan_scheduler",
+      "breakpoints": true
     }
   ]
 }

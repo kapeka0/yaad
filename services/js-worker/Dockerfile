@@ -1,11 +1,12 @@
-FROM node:20-alpine AS base
+# Node 22 gives us built-in zstd (zlib.zstdCompress) — no native deps needed.
+FROM node:22-alpine AS base
 
-# Install getJS (Go tool by 003random)
+# Install getJS (Go) + retire.js (npm CLI, for library/CVE fingerprinting)
 RUN apk add --no-cache go
 RUN go install github.com/003random/getJS/v2@latest
 ENV PATH=$PATH:/root/go/bin
 
-RUN npm install -g pnpm
+RUN npm install -g pnpm retire
 
 WORKDIR /app
 

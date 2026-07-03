@@ -1,7 +1,13 @@
 {
   "version": 1,
   "functions": {
+    "/api/js/grep": {},
     "/api/assets/export": {},
-    "/api/assets": {}
+    "/api/libraries/vulnerable": {},
+    "/api/assets/bulk": {},
+    "/api/assets": {},
+    "/api/programs/private": {},
+    "/api/programs": {},
+    "/api/libraries": {}
   }
 }

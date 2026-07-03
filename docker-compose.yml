@@ -25,6 +25,18 @@ services:
       timeout: 5s
       retries: 10
 
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:-yaad}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-yaadyaad}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+
   cultivate-api:
     build:
       context: .
@@ -48,6 +60,10 @@ services:
       REDIS_URL: redis://redis:6379
       PORT: 3000
       LOG_LEVEL: info
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-yaad}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-yaadyaad}
+      S3_BUCKET: ${S3_BUCKET:-js-blobs}
     ports:
       - "3000:3000"
     depends_on:
@@ -55,6 +71,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      minio:
+        condition: service_started
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
       interval: 5s
@@ -84,6 +102,10 @@ services:
       REDIS_URL: redis://redis:6379
       WORKER_CONCURRENCY: 5
       LOG_LEVEL: info
+      # Extra passive sources (crt.sh + gau); set to "false" to disable
+      CRTSH_ENABLED: "true"
+      GAU_ENABLED: "true"
+      MAX_RECURSION_DEPTH: 2
       # PDCP_API_KEY: your_key_here
     depends_on:
       api:
@@ -111,9 +133,20 @@ services:
       REDIS_URL: redis://redis:6379
       WORKER_CONCURRENCY: 5
       LOG_LEVEL: info
+      # JS blob storage (MinIO, content-addressable + zstd + dedup)
+      STORE_JS_BLOBS: "true"
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-yaad}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-yaadyaad}
+      S3_BUCKET: ${S3_BUCKET:-js-blobs}
+      JS_MAX_BYTES: 10485760
+      # Recursion budget for JS-discovered subdomains
+      MAX_RECURSION_DEPTH: 2
     depends_on:
       api:
         condition: service_healthy
+      minio:
+        condition: service_started
 
   endpoint-worker:
     build:
@@ -145,6 +178,26 @@ services:
       cultivate-api:
         condition: service_healthy
 
+  scheduler:
+    build:
+      context: .
+      dockerfile: services/scheduler/Dockerfile
+    environment:
+      DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: info
+      # How often (ms) to look for stale rows to refresh
+      SCHEDULER_TICK_MS: 900000
+      # Max rows re-enqueued per stage per tick
+      SCHEDULER_BATCH_SIZE: 500
+      # Re-enumerate a wildcard scope's subdomains after this many hours (7d)
+      RESCAN_ENUM_INTERVAL_HOURS: 168
+      # Re-scan a known asset (httpx→js→tech) after this many hours (1d)
+      RESCAN_HTTP_INTERVAL_HOURS: 24
+    depends_on:
+      api:
+        condition: service_healthy
+
   frontend:
     build:
       context: .
@@ -153,6 +206,7 @@ services:
       - "3001:3001"
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
+      REDIS_URL: redis://redis:6379
       NEXT_PUBLIC_ICON_BASE_URL: ${ICON_BASE_URL:-https://zrqvcicitadfkaaklgmg.supabase.co/storage/v1/object/public/tech-icons/}
     depends_on:
       postgres:
@@ -161,3 +215,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  minio_data:

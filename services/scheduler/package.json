@@ -1,0 +1,22 @@
+{
+  "name": "scheduler",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc --build --force tsconfig.json",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@yaad/config": "workspace:*",
+    "@yaad/db": "workspace:*",
+    "@yaad/queue": "workspace:*",
+    "bullmq": "^5.7.8",
+    "drizzle-orm": "^0.30.10"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.3",
+    "typescript": "^5.4.5"
+  }
+}

@@ -1,7 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db as getDbInstance } from "@/lib/db";
-import { assets, scopes, programs, technologies, assetTechnologies } from "@yaad/db";
-import { eq, ilike, gt, and, inArray, sql } from "drizzle-orm";
+import {
+  assets,
+  scopes,
+  programs,
+  technologies,
+  assetTechnologies,
+  webServices,
+  javascriptFiles,
+  jsLibraries,
+} from "@yaad/db";
+import { eq, ilike, gt, and, inArray, sql, type SQL } from "drizzle-orm";
 
 export const runtime = "nodejs";
 
@@ -17,6 +26,8 @@ export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const q = searchParams.get("q") ?? undefined;
   const technology = searchParams.get("technology") ?? undefined;
+  const library = searchParams.get("library") ?? undefined;
+  const libraryVersion = searchParams.get("libraryVersion") ?? undefined;
   const platform = searchParams.get("platform") ?? undefined;
   const program = searchParams.get("program") ?? undefined;
   const excludeVdpRaw = searchParams.get("excludeVdp");
@@ -27,62 +38,64 @@ export async function GET(req: NextRequest) {
 
   const dbInstance = getDbInstance();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const conditions: any[] = [];
-  if (cursor) conditions.push(gt(assets.id, cursor));
-  if (q) conditions.push(ilike(assets.domain, `%${q}%`));
-  if (platform) conditions.push(eq(programs.platform, platform));
-  if (program) conditions.push(eq(programs.name, program));
-  if (excludeVdp) conditions.push(eq(programs.offersReward, true));
-
-  // COUNT query (same filters, no cursor)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const countConditions: any[] = [];
-  if (q) countConditions.push(ilike(assets.domain, `%${q}%`));
-  if (platform) countConditions.push(eq(programs.platform, platform));
-  if (program) countConditions.push(eq(programs.name, program));
-  if (excludeVdp) countConditions.push(eq(programs.offersReward, true));
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let countQuery: any = dbInstance
-    .select({ count: sql<number>`count(distinct ${assets.id})` })
-    .from(assets)
-    .innerJoin(scopes, eq(assets.scopeId, scopes.id))
-    .innerJoin(programs, eq(scopes.programId, programs.id))
-    .$dynamic();
-
-  if (technology) {
-    countQuery = countQuery
-      .innerJoin(assetTechnologies, eq(assetTechnologies.assetId, assets.id))
-      .innerJoin(technologies, eq(technologies.id, assetTechnologies.technologyId))
-      .where(and(...countConditions, ilike(technologies.name, `%${technology}%`)));
-  } else if (countConditions.length > 0) {
-    countQuery = countQuery.where(and(...countConditions));
+  // Shared filters (excluding cursor, which only applies to the data query).
+  function baseConditions(withCursor: boolean): SQL[] {
+    const c: SQL[] = [];
+    if (withCursor && cursor) c.push(gt(assets.id, cursor));
+    if (q) c.push(ilike(assets.domain, `%${q}%`));
+    if (platform) c.push(eq(programs.platform, platform));
+    if (program) c.push(eq(programs.name, program));
+    if (excludeVdp) c.push(eq(programs.offersReward, true));
+    return c;
   }
 
+  // Applies technology/library joins + conditions to a dynamic query.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let query: any = dbInstance
-    .selectDistinct({
-      id: assets.id,
-      domain: assets.domain,
-      firstSeen: assets.firstSeen,
-      programId: programs.id,
-      programName: programs.name,
-      programPlatform: programs.platform,
-    })
-    .from(assets)
-    .innerJoin(scopes, eq(assets.scopeId, scopes.id))
-    .innerJoin(programs, eq(scopes.programId, programs.id))
-    .$dynamic();
-
-  if (technology) {
-    query = query
-      .innerJoin(assetTechnologies, eq(assetTechnologies.assetId, assets.id))
-      .innerJoin(technologies, eq(technologies.id, assetTechnologies.technologyId))
-      .where(and(...conditions, ilike(technologies.name, `%${technology}%`)));
-  } else if (conditions.length > 0) {
-    query = query.where(and(...conditions));
+  function applyFilters(query: any, conditions: SQL[]) {
+    if (technology) {
+      query = query
+        .innerJoin(assetTechnologies, eq(assetTechnologies.assetId, assets.id))
+        .innerJoin(technologies, eq(technologies.id, assetTechnologies.technologyId));
+      conditions.push(ilike(technologies.name, `%${technology}%`));
+    }
+    if (library) {
+      query = query
+        .innerJoin(webServices, eq(webServices.assetId, assets.id))
+        .innerJoin(javascriptFiles, eq(javascriptFiles.serviceId, webServices.id))
+        .innerJoin(jsLibraries, eq(jsLibraries.jsId, javascriptFiles.id));
+      conditions.push(ilike(jsLibraries.name, library));
+      if (libraryVersion) conditions.push(eq(jsLibraries.version, libraryVersion));
+    }
+    if (conditions.length > 0) query = query.where(and(...conditions));
+    return query;
   }
+
+  const countQuery = applyFilters(
+    dbInstance
+      .select({ count: sql<number>`count(distinct ${assets.id})` })
+      .from(assets)
+      .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+      .innerJoin(programs, eq(scopes.programId, programs.id))
+      .$dynamic(),
+    baseConditions(false)
+  );
+
+  const query = applyFilters(
+    dbInstance
+      .selectDistinct({
+        id: assets.id,
+        domain: assets.domain,
+        firstSeen: assets.firstSeen,
+        programId: programs.id,
+        programName: programs.name,
+        programPlatform: programs.platform,
+      })
+      .from(assets)
+      .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+      .innerJoin(programs, eq(scopes.programId, programs.id))
+      .$dynamic(),
+    baseConditions(true)
+  );
 
   const [rows, [{ count }]] = await Promise.all([
     query.orderBy(assets.id).limit(limit),

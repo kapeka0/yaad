@@ -12,7 +12,9 @@
     "@yaad/config": "workspace:*",
     "@yaad/db": "workspace:*",
     "@yaad/queue": "workspace:*",
-    "bullmq": "^5.7.8"
+    "@yaad/storage": "workspace:*",
+    "bullmq": "^5.7.8",
+    "drizzle-orm": "^0.30.10"
   },
   "devDependencies": {
     "tsx": "^4.7.3",

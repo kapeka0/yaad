@@ -6,7 +6,9 @@ import {
   integer,
   timestamp,
   uniqueIndex,
+  index,
   primaryKey,
+  jsonb,
 } from "drizzle-orm/pg-core";
 
 export const programs = pgTable("programs", {
@@ -29,19 +31,39 @@ export const scopes = pgTable(
     wildcard: boolean("wildcard").notNull().default(false),
     inScope: boolean("in_scope").notNull().default(true),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // Last time the scheduler (re-)ran subdomain enumeration for this scope.
+    // NULL means never enumerated → picked up on the next scheduler tick.
+    lastEnumeratedAt: timestamp("last_enumerated_at"),
   },
   (t) => ({
     uniqProgramAsset: uniqueIndex("scopes_program_asset_idx").on(t.programId, t.asset),
   })
 );
 
-export const assets = pgTable("assets", {
-  id: serial("id").primaryKey(),
-  scopeId: integer("scope_id").references(() => scopes.id),
-  domain: text("domain").notNull().unique(),
-  firstSeen: timestamp("first_seen").defaultNow().notNull(),
-  lastSeen: timestamp("last_seen").defaultNow().notNull(),
-});
+export const assets = pgTable(
+  "assets",
+  {
+    id: serial("id").primaryKey(),
+    scopeId: integer("scope_id").references(() => scopes.id),
+    domain: text("domain").notNull().unique(),
+    // How this asset was discovered: scope | subfinder | crtsh | gau | js | pdcp
+    source: text("source").notNull().default("scope"),
+    // IP it resolves to (from dnsx / httpx), null if unresolved
+    ip: text("ip"),
+    resolved: boolean("resolved").notNull().default(false),
+    // Recursion depth from the original root scope (0 = root)
+    depth: integer("depth").notNull().default(0),
+    firstSeen: timestamp("first_seen").defaultNow().notNull(),
+    lastSeen: timestamp("last_seen").defaultNow().notNull(),
+    // Last time the scheduler (re-)enqueued an http scan for this asset.
+    // NULL means never scanned by the scheduler → picked up on the next tick.
+    lastScannedAt: timestamp("last_scanned_at"),
+  },
+  (t) => ({
+    // Scheduler scans oldest-first; index makes the staleness query cheap.
+    lastScannedAtIdx: index("assets_last_scanned_at_idx").on(t.lastScannedAt),
+  })
+);
 
 export const webServices = pgTable("web_services", {
   id: serial("id").primaryKey(),
@@ -51,6 +73,19 @@ export const webServices = pgTable("web_services", {
   url: text("url").notNull().unique(),
   statusCode: integer("status_code"),
   title: text("title"),
+  // Enrichment from httpx
+  webServer: text("web_server"),
+  contentType: text("content_type"),
+  contentLength: integer("content_length"),
+  ip: text("ip"),
+  cname: text("cname"),
+  cdnName: text("cdn_name"),
+  faviconHash: text("favicon_hash"),
+  jarm: text("jarm"),
+  // httpx -tech-detect output, stored raw for cross-referencing
+  techFingerprint: jsonb("tech_fingerprint").$type<string[]>(),
+  // Full response headers as returned by httpx
+  responseHeaders: jsonb("response_headers").$type<Record<string, string>>(),
   lastScanned: timestamp("last_scanned").defaultNow().notNull(),
 });
 
@@ -60,7 +95,54 @@ export const javascriptFiles = pgTable("javascript_files", {
     .notNull()
     .references(() => webServices.id),
   url: text("url").notNull().unique(),
+  // sha256 of the fetched body; links to js_blobs (content-addressable storage)
+  sha256: text("sha256"),
+  sizeBytes: integer("size_bytes"),
+  httpStatus: integer("http_status"),
+  hasSourcemap: boolean("has_sourcemap").notNull().default(false),
+  fetchedAt: timestamp("fetched_at"),
 });
+
+// Content-addressable storage index. One row per unique JS body (dedup by sha256).
+// The actual bytes live in object storage (MinIO) under `storageKey`, zstd/gzip compressed.
+export const jsBlobs = pgTable("js_blobs", {
+  sha256: text("sha256").primaryKey(),
+  storageKey: text("storage_key").notNull(),
+  compression: text("compression").notNull().default("zstd"),
+  sizeBytes: integer("size_bytes").notNull(),
+  storedBytes: integer("stored_bytes").notNull(),
+  // Number of javascript_files rows pointing at this blob (for retention decisions)
+  refCount: integer("ref_count").notNull().default(1),
+  firstSeen: timestamp("first_seen").defaultNow().notNull(),
+});
+
+// Detected JS libraries/versions per file (retire.js + regex signatures).
+// This is the structured index used to cross-reference CVEs against assets.
+export const jsLibraries = pgTable(
+  "js_libraries",
+  {
+    id: serial("id").primaryKey(),
+    jsId: integer("js_id")
+      .notNull()
+      .references(() => javascriptFiles.id),
+    name: text("name").notNull(),
+    version: text("version").notNull().default(""),
+    // retirejs | sourcemap | regex
+    source: text("source").notNull().default("retirejs"),
+    // Known CVEs / advisories reported by retire.js for this exact version
+    vulnerabilities: jsonb("vulnerabilities").$type<string[]>(),
+    severity: text("severity"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (t) => ({
+    uniqJsLibVersion: uniqueIndex("js_libraries_js_name_version_idx").on(
+      t.jsId,
+      t.name,
+      t.version
+    ),
+    nameIdx: index("js_libraries_name_idx").on(t.name),
+  })
+);
 
 export const endpoints = pgTable(
   "endpoints",
@@ -114,5 +196,10 @@ export type NewAsset = typeof assets.$inferInsert;
 export type WebService = typeof webServices.$inferSelect;
 export type NewWebService = typeof webServices.$inferInsert;
 export type JavascriptFile = typeof javascriptFiles.$inferSelect;
+export type NewJavascriptFile = typeof javascriptFiles.$inferInsert;
+export type JsBlob = typeof jsBlobs.$inferSelect;
+export type NewJsBlob = typeof jsBlobs.$inferInsert;
+export type JsLibrary = typeof jsLibraries.$inferSelect;
+export type NewJsLibrary = typeof jsLibraries.$inferInsert;
 export type Technology = typeof technologies.$inferSelect;
 export type NewTechnology = typeof technologies.$inferInsert;

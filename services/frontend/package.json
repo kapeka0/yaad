@@ -17,6 +17,8 @@
     "@radix-ui/react-tooltip": "^1.1.5",
     "@yaad/config": "workspace:*",
     "@yaad/db": "workspace:*",
+    "@yaad/queue": "workspace:*",
+    "bullmq": "^5.7.8",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "drizzle-orm": "^0.30.10",
