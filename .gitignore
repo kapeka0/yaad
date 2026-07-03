@@ -7,6 +7,18 @@ dist/
 **/dist/
 *.js.map
 
+# Next.js
+.next/
+**/.next/
+out/
+**/out/
+next-env.d.ts
+
+# Compiled config (drizzle.config.ts is the source of truth)
+**/drizzle.config.js
+**/drizzle.config.d.ts
+**/drizzle.config.d.ts.map
+
 # pnpm
 .pnpm-store/
 .pnpm-debug.log*
@@ -35,6 +47,13 @@ Thumbs.db
 # Docker volumes (if bind-mounted locally)
 postgres_data/
 redis_data/
+
+# Docker Compose: per-environment overrides are local-only, so editing them
+# never conflicts with the versioned docker-compose.yml. Compose auto-merges
+# docker-compose.override.yml on top of the base file.
+docker-compose.override.yml
+docker-compose.override.yaml
+build.log
 
 # TypeScript
 *.tsbuildinfo

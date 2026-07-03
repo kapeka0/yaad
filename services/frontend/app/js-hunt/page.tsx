@@ -38,6 +38,27 @@ interface AffectedAsset {
   platform: string;
 }
 
+function EmptyState({ text }: { text: string }) {
+  return (
+    <div className="flex flex-col items-center justify-center text-center py-16 px-6 border border-dashed border-border rounded-md">
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src="/images/javascript-svgrepo-com.svg"
+        alt="JS Hunt"
+        className="w-12 h-12 opacity-40 mb-3 grayscale"
+      />
+      <p className="text-xs font-mono text-muted-foreground max-w-sm">{text}</p>
+    </div>
+  );
+}
+
+const GREP_HINT =
+  "Grep every unique JavaScript bundle stored in MinIO for an arbitrary signature — endpoints, API keys, secrets or library markers — and see which subdomains and programs serve it.";
+const VULN_HINT =
+  "Libraries flagged by retire.js with known CVEs will appear here. Cross-reference a disclosure against your assets to see exactly who is affected.";
+const LIB_HINT =
+  "Search the catalogue of JavaScript libraries and versions detected across every scanned asset.";
+
 export default function JsHuntPage() {
   const [activeTab, setActiveTab] = useState<"grep" | "vulnerable" | "libraries">("grep");
 
@@ -252,6 +273,8 @@ export default function JsHuntPage() {
               </form>
             </div>
 
+            {!isGrepping && !grepResults && !grepError && <EmptyState text={GREP_HINT} />}
+
             {grepError && (
               <div className="border border-destructive/30 bg-destructive/10 text-destructive text-xs font-mono p-3 rounded-md">
                 Error: {grepError}
@@ -270,13 +293,13 @@ export default function JsHuntPage() {
                 <div className="text-xs text-muted-foreground font-mono">
                   Scanned {grepResults.scanned} unique blobs. Found {grepResults.matchedBlobs} matches across {grepResults.matches.length} hosts.
                 </div>
-                <div className="border border-border rounded-md overflow-hidden">
-                  <table className="w-full text-xs font-mono table-fixed">
+                <div className="border border-border rounded-md overflow-x-auto">
+                  <table className="w-full text-xs font-mono">
                     <thead>
                       <tr className="border-b border-border bg-muted/40 text-[10px] text-muted-foreground uppercase tracking-wider">
-                        <th className="text-left px-3 py-2 w-[35%]">Subdomain</th>
-                        <th className="text-left px-3 py-2 w-[25%]">Program</th>
-                        <th className="text-left px-3 py-2 w-[40%]">Javascript File</th>
+                        <th className="text-left px-3 py-2">Subdomain</th>
+                        <th className="text-left px-3 py-2">Program</th>
+                        <th className="text-left px-3 py-2">Javascript File</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -289,16 +312,16 @@ export default function JsHuntPage() {
                       ) : (
                         grepResults.matches.map((match, i) => (
                           <tr key={i} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                            <td className="px-3 py-2 text-foreground truncate" title={match.domain}>{match.domain}</td>
-                            <td className="px-3 py-2 text-muted-foreground truncate">{match.programName}</td>
-                            <td className="px-3 py-2 text-muted-foreground truncate">
+                            <td className="px-3 py-2 text-foreground whitespace-nowrap">{match.domain}</td>
+                            <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">{match.programName}</td>
+                            <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
                               <a
                                 href={match.jsUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                                 className="inline-flex items-center gap-1 hover:text-foreground hover:underline"
                               >
-                                {match.jsUrl} <ExternalLink className="w-2.5 h-2.5" />
+                                {match.jsUrl} <ExternalLink className="w-2.5 h-2.5 shrink-0" />
                               </a>
                             </td>
                           </tr>
@@ -332,9 +355,7 @@ export default function JsHuntPage() {
             )}
 
             {!isLoadingVulnerable && vulnerableLibs.length === 0 && !vulnerableError && (
-              <div className="border border-border text-center py-8 text-xs text-muted-foreground font-mono rounded-md">
-                No vulnerable JS libraries detected in storage yet.
-              </div>
+              <EmptyState text={VULN_HINT} />
             )}
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -423,11 +444,11 @@ export default function JsHuntPage() {
                             <tbody className="divide-y divide-border">
                               {affectedAssets.map((asset, i) => (
                                 <tr key={i} className="hover:bg-muted/30 transition-colors">
-                                  <td className="px-3 py-2 font-semibold text-foreground truncate max-w-[150px]" title={asset.domain}>{asset.domain}</td>
-                                  <td className="px-3 py-2 text-muted-foreground truncate max-w-[120px]">
+                                  <td className="px-3 py-2 font-semibold text-foreground whitespace-nowrap">{asset.domain}</td>
+                                  <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
                                     {asset.programName} <span className="text-[9px] text-muted-foreground/60">({asset.platform})</span>
                                   </td>
-                                  <td className="px-3 py-2 text-muted-foreground truncate max-w-[200px]">
+                                  <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
                                     <a
                                       href={asset.jsUrl}
                                       target="_blank"
@@ -501,6 +522,8 @@ export default function JsHuntPage() {
               </div>
             )}
 
+            {!isLoadingLibs && libResults.length === 0 && !libError && <EmptyState text={LIB_HINT} />}
+
             {libResults.length > 0 && (
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-1 border border-border rounded-md divide-y divide-border overflow-hidden bg-background">
@@ -565,11 +588,11 @@ export default function JsHuntPage() {
                             <tbody className="divide-y divide-border">
                               {affectedAssets.map((asset, i) => (
                                 <tr key={i} className="hover:bg-muted/30 transition-colors">
-                                  <td className="px-3 py-2 font-semibold text-foreground truncate max-w-[150px]" title={asset.domain}>{asset.domain}</td>
-                                  <td className="px-3 py-2 text-muted-foreground truncate max-w-[120px]">
+                                  <td className="px-3 py-2 font-semibold text-foreground whitespace-nowrap">{asset.domain}</td>
+                                  <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
                                     {asset.programName} <span className="text-[9px] text-muted-foreground/60">({asset.platform})</span>
                                   </td>
-                                  <td className="px-3 py-2 text-muted-foreground truncate max-w-[200px]">
+                                  <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
                                     <a
                                       href={asset.jsUrl}
                                       target="_blank"

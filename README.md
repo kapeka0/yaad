@@ -54,9 +54,13 @@ A scalable system that collects assets from bug bounty programs, enumerates thei
 | `js-worker`        | Collect + store JS, detect libraries            | getJS, retire.js, MinIO |
 | `endpoint-worker`  | Extract endpoints + subdomains from JS          | linkfinder       |
 | `tech-worker`      | Detect technologies per asset                   | cultivate-api    |
+| `scheduler`        | Periodically re-enumerate scopes and re-scan assets | node cron loop |
 | `api`              | REST API for querying the database              | Hono             |
-| `frontend`         | Web UI for browsing and exporting assets        | Next.js 15       |
+| `frontend`         | Web UI: assets, JS Hunt, manage, stats          | Next.js 15       |
 | `cultivate-api`    | Technology fingerprinting service               | Wappalyzer-based |
+| `postgres`         | Primary datastore                               | PostgreSQL 15    |
+| `redis`            | Job queues                                      | Redis 7 / BullMQ |
+| `minio`            | Object storage for JS blobs                     | MinIO (S3)       |
 
 ---
 
@@ -96,6 +100,82 @@ A scalable system that collects assets from bug bounty programs, enumerates thei
    └─ queries cultivate-api for each asset URL
    └─ stores technologies + asset_technologies
 ```
+
+---
+
+## How each microservice works
+
+Every worker is a small, single-responsibility Node process that consumes one
+BullMQ queue, does its job, writes to Postgres, and (usually) enqueues the next
+stage. They share three packages: `@yaad/db` (Drizzle schema + client),
+`@yaad/queue` (queue names, job types, Redis connection) and `@yaad/config`
+(env parsing). Scaling any stage is just running more replicas of that service.
+
+### `scope-importer` (one-shot / cron)
+Downloads the JSON files from **bounty-targets-data**, parses each program's
+scope entries, and upserts `programs` + `scopes`. For every in-scope wildcard
+(`*.example.com`) it enqueues an `enumerate_subdomains` job. Runs on startup and
+can be re-run to pick up upstream changes. Private programs added from the UI go
+through the same tables, so they behave identically downstream.
+
+### `subdomain-worker` — queue: `enumerate_subdomains`
+Fans out to every enabled source in parallel — **subfinder** (`-all -recursive`),
+**crt.sh** (certificate transparency), **gau** (historical URLs) and optionally
+**PDCP** — deduplicating hostnames and tracking which source found each. It then
+resolves the full set with **dnsx**, which drops dead names and records the IP.
+Live hosts are upserted into `assets` (with `source`, `ip`, `resolved`, `depth`)
+and a `scan_http` job is queued for each newly discovered one.
+
+### `httpx-worker` — queue: `scan_http`
+Runs **httpx** against a host to confirm a live HTTP service and fingerprint it:
+status, title, web server, content type/length, IP, CNAME, CDN, **favicon hash**,
+**JARM**, detected technologies and response headers — all persisted to
+`web_services`. httpx-detected technologies are written straight to
+`technologies`/`asset_technologies`. It then enqueues `collect_js` and
+`detect_technology` for the service.
+
+### `js-worker` — queue: `collect_js`
+Runs **getJS** to discover script URLs on a service, then for each new script:
+downloads the body (size-capped), hashes it (sha256), and stores it in **MinIO**
+**content-addressably** — identical bundles across many hosts are stored once,
+zstd-compressed. It records `javascript_files` + `js_blobs`, runs **retire.js**
+(plus inline version banners) to populate `js_libraries` with library, version
+and any known CVEs, and mines hostnames from the body to recurse back into
+`enumerate_subdomains` (bounded by `MAX_RECURSION_DEPTH`). Finally it enqueues
+`analyze_js`.
+
+### `endpoint-worker` — queue: `analyze_js`
+Runs **LinkFinder** over each JS file to extract endpoint paths into `endpoints`.
+Absolute URLs yield new hostnames, which are added as assets and queued for
+`scan_http` + `detect_technology` — a second recursion path complementing the
+js-worker's regex mining.
+
+### `tech-worker` — queue: `detect_technology`
+Calls **cultivate-api** for a URL, filters detections by `CONFIDENCE_THRESHOLD`,
+and upserts `technologies` + `asset_technologies` (with version and icon). This is
+what powers "which programs run Next.js 13?".
+
+### `scheduler` (long-running loop)
+Wakes every `SCHEDULER_TICK_MS` and re-feeds the pipeline so data stays fresh:
+wildcard scopes older than `RESCAN_ENUM_INTERVAL_HOURS` get re-enumerated, and
+assets not scanned within `RESCAN_HTTP_INTERVAL_HOURS` get a fresh `scan_http`.
+`SCHEDULER_BATCH_SIZE` caps how many rows are re-queued per tick to avoid
+thundering-herd load.
+
+### `api` (Hono, long-running)
+Runs DB migrations on boot, then serves read queries: assets by technology or
+library, programs affected by a CVE, per-asset technologies/libraries, and the
+`/js/grep` endpoint that decompresses stored blobs and greps them for a pattern.
+
+### `frontend` (Next.js, long-running)
+The UI. Queries Postgres directly for reads (assets, libraries, stats) and posts
+to its own API routes for writes (private programs, bulk subdomains) — those
+enqueue BullMQ jobs. `/js/grep` is proxied to the `api` service because grepping
+needs MinIO access.
+
+### `cultivate-api` (long-running)
+Wappalyzer-style fingerprinting service consumed by `tech-worker`. Headless-
+browser based, isolated in its own container.
 
 ---
 
@@ -154,6 +234,21 @@ docker compose up -d
 
 The API will be available at `http://localhost:3000`.
 The frontend will be available at `http://localhost:3001`.
+The MinIO console (stored JS blobs) is at `http://localhost:9001`.
+
+### Per-environment configuration
+
+Don't edit the tracked `docker-compose.yml` for machine-specific changes — it
+will conflict on every pull. Instead put local tweaks (ports, secrets, keys,
+scaling) in a git-ignored override that Compose merges automatically:
+
+```bash
+cp docker-compose.override.example.yml docker-compose.override.yml
+# edit docker-compose.override.yml, then:
+docker compose up -d
+```
+
+Application secrets and tunables live in `.env` (also git-ignored).
 
 ---
 
@@ -171,6 +266,16 @@ A web UI for browsing, filtering, and exporting discovered assets, available at 
 - **Manage Scopes**:
   - **Add Private Programs**: Insert new target programs and configure their wildcard or standalone scope rules.
   - **Add Bulk Subdomains**: Ingest subdomains in bulk for any selected program. Wildcards trigger passive/active enumeration workers, and standalone subdomains are mapped to relevant scopes and enqueued for HTTP scanning immediately.
+- **Stats**: Live overview of database size, per-table counts, JS blob storage (dedup + compression ratio), pipeline queue depths and the last scan time.
+
+### Adding private programs
+
+Public scopes sync automatically from bounty-targets-data. For private / invite-only targets that aren't in that dataset, open **manage** at `http://localhost:3001/programs/manage`:
+
+1. **New program** — enter a name and platform, then one scope per line. A wildcard like `*.example.com` queues subdomain enumeration (subfinder + crt.sh + gau → dnsx); a bare host (e.g. `app.example.com`) is scanned directly.
+2. **Bulk subdomains** — pick a program and paste hostnames you already have. Each is matched to an existing scope (or a new one is created) and queued straight into the scan → JS → tech/library pipeline.
+
+Everything added this way flows through the same workers as public scopes, so it shows up in the Assets browser and JS Hunt as it gets processed.
 
 ---
 
@@ -216,3 +321,4 @@ A web UI for browsing, filtering, and exporting discovered assets, available at 
 | `S3_SECRET_KEY`           | `yaadyaad`                                    | MinIO/S3 secret key                                     |
 | `S3_BUCKET`               | `js-blobs`                                    | Bucket for stored JS blobs                              |
 | `JS_MAX_BYTES`            | `10485760`                                    | Max JS file size to download/store (10 MB)              |
+| `API_URL`                 | `http://api:3000`                             | Backend API URL used by the frontend to proxy `/js/grep` |

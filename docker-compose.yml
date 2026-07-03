@@ -207,9 +207,15 @@ services:
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
+      # Backend API (used to proxy /js/grep, which needs MinIO access)
+      API_URL: http://api:3000
       NEXT_PUBLIC_ICON_BASE_URL: ${ICON_BASE_URL:-https://zrqvcicitadfkaaklgmg.supabase.co/storage/v1/object/public/tech-icons/}
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      api:
         condition: service_healthy
 
 volumes:

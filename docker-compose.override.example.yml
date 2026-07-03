@@ -1,0 +1,34 @@
+# Per-environment overrides — copy to docker-compose.override.yml and edit.
+#
+#   cp docker-compose.override.example.yml docker-compose.override.yml
+#
+# docker-compose.override.yml is git-ignored, so your environment-specific
+# changes (ports, secrets, credentials, scaling, keys) never conflict with the
+# versioned docker-compose.yml. Docker Compose merges this file automatically on
+# every `docker compose up`.
+
+services:
+  # Example: change host ports to avoid clashes on your machine.
+  api:
+    ports:
+      - "8080:3000"
+
+  frontend:
+    ports:
+      - "8081:3001"
+
+  # Example: enable ProjectDiscovery Cloud for richer subdomain enumeration.
+  subdomain-worker:
+    environment:
+      PDCP_API_KEY: "your_key_here"
+
+  # Example: use your own MinIO/S3 credentials instead of the demo defaults.
+  minio:
+    environment:
+      MINIO_ROOT_USER: "changeme"
+      MINIO_ROOT_PASSWORD: "a-strong-secret"
+
+  # Example: scale a worker horizontally.
+  js-worker:
+    deploy:
+      replicas: 3

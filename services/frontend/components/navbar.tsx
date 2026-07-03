@@ -1,24 +1,48 @@
+"use client";
+
 import Link from "next/link";
+import { usePathname } from "next/navigation";
+import { cn } from "@/lib/utils";
 import { ThemeToggle } from "./theme-toggle";
 
+const LINKS = [
+  { href: "/js-hunt", label: "JS Hunt" },
+  { href: "/programs/manage", label: "Manage Scopes" },
+  { href: "/stats", label: "Stats" },
+];
+
 export function Navbar() {
+  const pathname = usePathname();
+
   return (
     <header className="sticky top-0 z-50 border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto px-4 max-w-7xl flex h-12 items-center justify-between">
         <div className="flex items-center gap-6">
-          <Link href="/" className="font-mono font-bold text-sm tracking-tight hover:opacity-80 transition-opacity">
+          <Link
+            href="/"
+            className={cn(
+              "font-mono font-bold text-sm tracking-tight transition-opacity hover:opacity-80",
+              pathname === "/" && "text-foreground"
+            )}
+          >
             YAAD
           </Link>
           <nav className="flex items-center gap-4 text-xs font-mono">
-            <Link href="/" className="text-muted-foreground hover:text-foreground transition-colors">
-              Assets
-            </Link>
-            <Link href="/js-hunt" className="text-muted-foreground hover:text-foreground transition-colors">
-              JS Hunt
-            </Link>
-            <Link href="/programs/manage" className="text-muted-foreground hover:text-foreground transition-colors">
-              Manage Scopes
-            </Link>
+            {LINKS.map((l) => {
+              const active = pathname.startsWith(l.href);
+              return (
+                <Link
+                  key={l.href}
+                  href={l.href}
+                  className={cn(
+                    "transition-colors",
+                    active ? "text-foreground font-semibold" : "text-muted-foreground hover:text-foreground"
+                  )}
+                >
+                  {l.label}
+                </Link>
+              );
+            })}
           </nav>
         </div>
         <div className="flex items-center gap-1">
