@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import { Search, Loader2, ShieldAlert, ArrowRight, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -41,10 +42,11 @@ interface AffectedAsset {
 function EmptyState({ text }: { text: string }) {
   return (
     <div className="flex flex-col items-center justify-center text-center py-16 px-6 border border-dashed border-border rounded-md">
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
+      <Image
         src="/images/javascript-svgrepo-com.svg"
         alt="JS Hunt"
+        width={48}
+        height={48}
         className="w-12 h-12 opacity-40 mb-3 grayscale"
       />
       <p className="text-xs font-mono text-muted-foreground max-w-sm">{text}</p>

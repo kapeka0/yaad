@@ -10,5 +10,13 @@
   "devDependencies": {
     "postgres": "^3.4.8",
     "typescript": "^5.4.5"
+  },
+  "pnpm": {
+    "ignoredBuiltDependencies": [
+      "es5-ext",
+      "esbuild",
+      "msgpackr-extract",
+      "sharp"
+    ]
   }
 }

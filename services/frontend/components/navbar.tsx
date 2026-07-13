@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
@@ -52,7 +53,7 @@ export function Navbar() {
             rel="noopener noreferrer"
             className="flex items-center justify-center w-8 h-8 rounded-md text-muted-foreground hover:text-foreground transition-colors"
           >
-            <img src="/images/github.svg" alt="GitHub" className="w-4 h-4" />
+            <Image src="/images/github.svg" alt="GitHub" width={16} height={16} className="w-4 h-4" />
           </a>
           <ThemeToggle />
         </div>
