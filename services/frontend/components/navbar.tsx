@@ -7,7 +7,7 @@ import { ThemeToggle } from "./theme-toggle";
 
 const LINKS = [
   { href: "/js-hunt", label: "JS Hunt" },
-  { href: "/programs/manage", label: "Manage Scopes" },
+  { href: "/programs/manage", label: "Manage" },
   { href: "/stats", label: "Stats" },
 ];
 

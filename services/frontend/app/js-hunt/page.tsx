@@ -52,12 +52,9 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
-const GREP_HINT =
-  "Grep every unique JavaScript bundle stored in MinIO for an arbitrary signature — endpoints, API keys, secrets or library markers — and see which subdomains and programs serve it.";
-const VULN_HINT =
-  "Libraries flagged by retire.js with known CVEs will appear here. Cross-reference a disclosure against your assets to see exactly who is affected.";
-const LIB_HINT =
-  "Search the catalogue of JavaScript libraries and versions detected across every scanned asset.";
+const GREP_HINT = "Grep stored JS bundles for a signature and see which hosts serve it.";
+const VULN_HINT = "Libraries with known CVEs appear here once detected.";
+const LIB_HINT = "Search libraries and versions detected across scanned assets.";
 
 export default function JsHuntPage() {
   const [activeTab, setActiveTab] = useState<"grep" | "vulnerable" | "libraries">("grep");
@@ -183,12 +180,9 @@ export default function JsHuntPage() {
     <div className="space-y-4">
       {/* Header */}
       <div className="border-b border-border pb-4">
-        <h1 className="text-xs font-mono text-muted-foreground uppercase tracking-widest mb-1">
+        <h1 className="text-xs font-mono text-muted-foreground uppercase tracking-widest">
           yaad / js-hunt
         </h1>
-        <p className="text-xs text-muted-foreground">
-          Identify vulnerable JavaScript libraries and search scripts for signatures
-        </p>
       </div>
 
       {/* Tabs */}
@@ -202,7 +196,7 @@ export default function JsHuntPage() {
               : "border-transparent text-muted-foreground hover:text-foreground"
           )}
         >
-          JS Signature Grep
+          Grep
         </button>
         <button
           onClick={() => setActiveTab("vulnerable")}
@@ -213,7 +207,7 @@ export default function JsHuntPage() {
               : "border-transparent text-muted-foreground hover:text-foreground"
           )}
         >
-          CVE Hunting (Vulnerable)
+          Vulnerable
         </button>
         <button
           onClick={() => setActiveTab("libraries")}
@@ -224,7 +218,7 @@ export default function JsHuntPage() {
               : "border-transparent text-muted-foreground hover:text-foreground"
           )}
         >
-          Library Search
+          Libraries
         </button>
       </div>
 
@@ -234,7 +228,7 @@ export default function JsHuntPage() {
           <div className="space-y-4">
             <div className="bg-muted/30 border border-border rounded-md p-3 text-xs font-mono">
               <p className="text-muted-foreground mb-2">
-                Scan all stored unique JavaScript files (deduplicated by sha256) for an arbitrary signature or API key pattern.
+                Scan stored JS files for a signature or API key pattern.
               </p>
               <form onSubmit={handleGrepSubmit} className="flex flex-col sm:flex-row gap-2">
                 <div className="relative flex-1">
@@ -284,7 +278,7 @@ export default function JsHuntPage() {
             {isGrepping && (
               <div className="flex items-center justify-center py-12 text-xs text-muted-foreground font-mono gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                Grepping blobs from S3 storage... This may take a moment.
+                Grepping blobs...
               </div>
             )}
 
@@ -337,14 +331,10 @@ export default function JsHuntPage() {
 
         {activeTab === "vulnerable" && (
           <div className="space-y-4">
-            <div className="text-xs text-muted-foreground font-mono">
-              Libraries detected by retire.js containing known security vulnerabilities.
-            </div>
-
             {isLoadingVulnerable && (
               <div className="flex items-center justify-center py-12 text-xs text-muted-foreground font-mono gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                Querying vulnerable JavaScript index...
+                Loading...
               </div>
             )}
 
@@ -361,7 +351,7 @@ export default function JsHuntPage() {
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div className="md:col-span-1 border border-border rounded-md divide-y divide-border overflow-hidden">
                 <div className="bg-muted/40 px-3 py-2 font-mono text-xs font-semibold border-b border-border text-[10px] text-muted-foreground uppercase tracking-wider">
-                  Vulnerable Library List
+                  Vulnerable Libraries
                 </div>
                 <div className="max-h-[500px] overflow-y-auto divide-y divide-border bg-background">
                   {vulnerableLibs.map((lib) => {
@@ -406,7 +396,7 @@ export default function JsHuntPage() {
                         <span className="text-muted-foreground">({expandedLib.split("@")[1]})</span>
                       </div>
                       <p className="text-[10px] text-muted-foreground">
-                        CVEs / Advisories associated:
+                        CVEs / advisories:
                       </p>
                       <div className="flex flex-wrap gap-1 mt-1">
                         {vulnerableLibs.find(l => `${l.name}@${l.version}` === expandedLib)?.vulnerabilities?.map((vuln, i) => (
@@ -419,17 +409,17 @@ export default function JsHuntPage() {
 
                     <div className="border-t border-border pt-4 flex-1 flex flex-col">
                       <h4 className="font-semibold text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
-                        Affected Assets & Programs
+                        Affected Assets
                       </h4>
 
                       {isLoadingAffected ? (
                         <div className="flex-1 flex items-center justify-center gap-2 py-12 text-muted-foreground">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          Locating affected domains...
+                          Loading...
                         </div>
                       ) : affectedAssets.length === 0 ? (
                         <div className="flex-1 flex items-center justify-center text-muted-foreground py-12 border border-dashed border-border rounded-md">
-                          No matching assets in database
+                          No matching assets
                         </div>
                       ) : (
                         <div className="flex-1 overflow-x-auto max-h-[300px] border border-border rounded-md">
@@ -469,7 +459,7 @@ export default function JsHuntPage() {
                 ) : (
                   <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-muted-foreground font-mono text-xs">
                     <ShieldAlert className="w-8 h-8 text-muted-foreground/30 mb-2" />
-                    <span>Select a vulnerable library from the list to hunt for affected assets.</span>
+                    <span>Select a library to see affected assets.</span>
                   </div>
                 )}
               </div>
@@ -481,7 +471,7 @@ export default function JsHuntPage() {
           <div className="space-y-4 font-mono text-xs">
             <div className="bg-muted/30 border border-border rounded-md p-3">
               <p className="text-muted-foreground mb-2">
-                Search standard Javascript libraries catalogued across all scanned sites.
+                Search JS libraries catalogued across scanned sites.
               </p>
               <form onSubmit={handleSearchLibs} className="flex gap-2">
                 <div className="relative flex-1">
@@ -518,7 +508,7 @@ export default function JsHuntPage() {
             {isLoadingLibs && (
               <div className="flex items-center justify-center py-12 text-muted-foreground gap-2">
                 <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                Querying database...
+                Loading...
               </div>
             )}
 
@@ -528,7 +518,7 @@ export default function JsHuntPage() {
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div className="md:col-span-1 border border-border rounded-md divide-y divide-border overflow-hidden bg-background">
                   <div className="bg-muted/40 px-3 py-2 font-semibold text-[10px] text-muted-foreground uppercase tracking-wider border-b border-border">
-                    Libraries & Versions Found
+                    Libraries Found
                   </div>
                   <div className="max-h-[400px] overflow-y-auto divide-y divide-border">
                     {libResults.map((lib) => {
@@ -561,15 +551,12 @@ export default function JsHuntPage() {
                     <div className="p-4 flex-1 flex flex-col space-y-4">
                       <div>
                         <h3 className="font-semibold text-sm mb-1">{expandedSearchLib.split("@")[0]} ({expandedSearchLib.split("@")[1]})</h3>
-                        <p className="text-[10px] text-muted-foreground">
-                          Assets configured with this library version:
-                        </p>
                       </div>
 
                       {isLoadingAffected ? (
                         <div className="flex-1 flex items-center justify-center gap-2 py-12 text-muted-foreground">
                           <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          Locating domains...
+                          Loading...
                         </div>
                       ) : affectedAssets.length === 0 ? (
                         <div className="flex-1 flex items-center justify-center text-muted-foreground py-12 border border-dashed border-border rounded-md">
@@ -612,7 +599,7 @@ export default function JsHuntPage() {
                   ) : (
                     <div className="flex-1 flex flex-col items-center justify-center text-center p-6 text-muted-foreground">
                       <ArrowRight className="w-6 h-6 text-muted-foreground/30 mb-2" />
-                      <span>Select a library version to view its instances across program domains.</span>
+                      <span>Select a library to see its instances.</span>
                     </div>
                   )}
                 </div>

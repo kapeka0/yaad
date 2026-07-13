@@ -110,12 +110,9 @@ export default function ManageProgramsPage() {
   return (
     <div className="max-w-2xl mx-auto space-y-8">
       <div className="border-b border-border pb-4">
-        <h1 className="text-xs font-mono text-muted-foreground uppercase tracking-widest mb-1">
+        <h1 className="text-xs font-mono text-muted-foreground uppercase tracking-widest">
           yaad / manage
         </h1>
-        <p className="text-xs text-muted-foreground">
-          Add private programs and scopes that aren&apos;t in the public dataset.
-        </p>
       </div>
 
       {/* New program */}
@@ -145,7 +142,7 @@ export default function ManageProgramsPage() {
           </button>
         </div>
         <p className="text-[10px] font-mono text-muted-foreground/60">
-          One scope per line. <code className="text-foreground">*.domain</code> → subdomain enumeration; a bare host → scanned directly.
+          One scope per line. <code className="text-foreground">*.domain</code> enumerates; a bare host scans directly.
         </p>
         <Status msg={progMsg} />
       </form>
@@ -178,7 +175,7 @@ export default function ManageProgramsPage() {
         />
         <div className="flex items-center justify-between">
           <p className="text-[10px] font-mono text-muted-foreground/60">
-            Matched to a scope (or a new one is created), then queued for scanning.
+            Matches an existing scope or creates one, then queues scans.
           </p>
           <button type="submit" disabled={savingSubs || !programId} className={btnCls}>
             {savingSubs ? "Adding…" : "Add subdomains"}

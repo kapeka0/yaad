@@ -39,12 +39,9 @@ export default async function HomePage() {
   return (
     <div className="space-y-4">
       <div className="border-b border-border pb-4">
-        <h1 className="text-xs font-mono text-muted-foreground uppercase tracking-widest mb-1">
+        <h1 className="text-xs font-mono text-muted-foreground uppercase tracking-widest">
           yaad / assets
         </h1>
-        <p className="text-xs text-muted-foreground">
-          Bug bounty asset database
-        </p>
       </div>
       <Suspense>
         <AssetFilters

@@ -72,10 +72,7 @@ export default function StatsPage() {
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       <div className="border-b border-border pb-4 flex items-end justify-between">
-        <div>
-          <h1 className="text-xs font-mono text-muted-foreground uppercase tracking-widest mb-1">yaad / stats</h1>
-          <p className="text-xs text-muted-foreground">Live overview of the database, storage and pipeline.</p>
-        </div>
+        <h1 className="text-xs font-mono text-muted-foreground uppercase tracking-widest">yaad / stats</h1>
         {data && (
           <div className="text-[10px] font-mono text-muted-foreground">
             last scan · <span className="text-foreground">{timeAgo(data.lastScan)}</span>

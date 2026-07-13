@@ -5,7 +5,7 @@ import { NuqsAdapter } from "nuqs/adapters/next/app";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "YAAD ",
+  title: "YAAD",
   description: "Bug bounty asset database",
   icons: {
     icon: "/images/logo.svg",
