@@ -23,7 +23,9 @@ export async function processDetectTechnology(
         .values({ name: tech.name, version: tech.version ?? "", icon: tech.icon ?? "" })
         .onConflictDoUpdate({
           target: [technologies.name, technologies.version],
-          set: { icon: sql`excluded.icon` },
+          set: {
+            icon: sql`CASE WHEN excluded.icon <> '' THEN excluded.icon ELSE ${technologies.icon} END`,
+          },
         })
         .returning();
 

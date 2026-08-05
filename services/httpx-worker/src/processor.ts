@@ -82,7 +82,9 @@ async function upsertTech(db: Db, assetId: number, name: string): Promise<void> 
       .values({ name, version: "" })
       .onConflictDoUpdate({
         target: [technologies.name, technologies.version],
-        set: { icon: sql`excluded.icon` },
+        set: {
+          icon: sql`CASE WHEN excluded.icon <> '' THEN excluded.icon ELSE ${technologies.icon} END`,
+        },
       })
       .returning();
     if (tech) {

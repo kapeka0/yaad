@@ -1,12 +1,14 @@
 "use client";
 
 import { cn } from "@/lib/utils";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { useInView } from "react-intersection-observer";
 import useSWRInfinite from "swr/infinite";
 import { Skeleton } from "./ui/skeleton";
 import { TechIcons } from "./tech-icons";
+import { PlatformIcon } from "./platform-icon";
 
 const SKELETON_WIDTHS = ["w-full","w-10/12","w-9/12","w-8/12","w-7/12","w-6/12","w-5/12","w-4/12"];
 
@@ -32,6 +34,11 @@ interface Page {
 }
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
+
+function domainUrl(domain: string): string {
+  if (/^https?:\/\//i.test(domain)) return domain;
+  return `https://${domain.replace(/^\*\./, "")}`;
+}
 
 function buildUrl(base: URLSearchParams, cursor?: number) {
   const p = new URLSearchParams(base.toString());
@@ -135,15 +142,25 @@ export function AssetsTable() {
                 )}
               >
                 <td className="px-3 py-2 text-foreground max-w-xs">
-                  <span className="block truncate" title={asset.domain}>{asset.domain}</span>
+                  <a
+                    href={domainUrl(asset.domain)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="block truncate underline-offset-2 hover:text-primary hover:underline"
+                    title={`Open ${asset.domain}`}
+                  >
+                    {asset.domain}
+                  </a>
                 </td>
                 <td className="px-3 py-2">
-                  <span className="text-muted-foreground">
-                    {asset.program.name}
-                  </span>
-                  <span className="ml-1 text-[10px] text-muted-foreground/60">
-                    ({asset.program.platform})
-                  </span>
+                  <Link
+                    href={`/?program=${encodeURIComponent(asset.program.name)}`}
+                    className="inline-flex max-w-full items-center gap-1.5 text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
+                    title={`Filter by ${asset.program.name} (${asset.program.platform})`}
+                  >
+                    <span className="truncate">{asset.program.name}</span>
+                    <PlatformIcon platform={asset.program.platform} />
+                  </Link>
                 </td>
                 <td className="px-3 py-2">
                   <TechIcons techs={asset.technologies} />
