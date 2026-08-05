@@ -15,6 +15,7 @@ export const programs = pgTable("programs", {
   id: serial("id").primaryKey(),
   name: text("name").notNull().unique(),
   platform: text("platform").notNull(),
+  url: text("url"),
   offersReward: boolean("offers_reward").notNull().default(true),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

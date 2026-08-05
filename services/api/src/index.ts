@@ -42,6 +42,7 @@ async function bootstrap() {
         id: programs.id,
         name: programs.name,
         platform: programs.platform,
+        url: programs.url,
         createdAt: programs.createdAt,
         assetCount: count(assets.id),
       })

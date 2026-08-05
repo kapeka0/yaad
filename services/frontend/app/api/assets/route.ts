@@ -89,6 +89,7 @@ export async function GET(req: NextRequest) {
         programId: programs.id,
         programName: programs.name,
         programPlatform: programs.platform,
+        programUrl: programs.url,
       })
       .from(assets)
       .innerJoin(scopes, eq(assets.scopeId, scopes.id))
@@ -125,11 +126,16 @@ export async function GET(req: NextRequest) {
     techsByAsset.get(t.assetId)!.push(t);
   }
 
-  const data = (rows as { id: number; domain: string; firstSeen: Date; programId: number; programName: string; programPlatform: string }[]).map((r) => ({
+  const data = (rows as { id: number; domain: string; firstSeen: Date; programId: number; programName: string; programPlatform: string; programUrl: string | null }[]).map((r) => ({
     id: r.id,
     domain: r.domain,
     firstSeen: r.firstSeen,
-    program: { id: r.programId, name: r.programName, platform: r.programPlatform },
+    program: {
+      id: r.programId,
+      name: r.programName,
+      platform: r.programPlatform,
+      url: r.programUrl,
+    },
     technologies: (techsByAsset.get(r.id) ?? []).map((t) => ({
       id: t.techId,
       name: t.techName,

@@ -1,5 +1,5 @@
 import { Queue } from "bullmq";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import type { Db } from "@yaad/db";
 import { programs, scopes, assets } from "@yaad/db";
 import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
@@ -15,6 +15,25 @@ function normalizeAssetDomain(raw: string): string {
   return raw;
 }
 
+export async function updateProgramUrls(
+  db: Db,
+  normalizedPrograms: NormalizedProgram[],
+): Promise<number> {
+  let updatedCount = 0;
+
+  for (const program of normalizedPrograms) {
+    if (!program.url) continue;
+    const updated = await db
+      .update(programs)
+      .set({ url: program.url })
+      .where(eq(programs.name, program.programName))
+      .returning({ id: programs.id });
+    updatedCount += updated.length;
+  }
+
+  return updatedCount;
+}
+
 export async function importPrograms(
   db: Db,
   normalizedPrograms: NormalizedProgram[],
@@ -25,10 +44,19 @@ export async function importPrograms(
     // Upsert program
     const [program] = await db
       .insert(programs)
-      .values({ name: prog.programName, platform: prog.platform, offersReward: prog.offersReward ?? true })
+      .values({
+        name: prog.programName,
+        platform: prog.platform,
+        url: prog.url,
+        offersReward: prog.offersReward ?? true,
+      })
       .onConflictDoUpdate({
         target: programs.name,
-        set: { platform: prog.platform, offersReward: prog.offersReward ?? true },
+        set: {
+          platform: prog.platform,
+          url: prog.url,
+          offersReward: prog.offersReward ?? true,
+        },
       })
       .returning();
 
@@ -49,11 +77,12 @@ export async function importPrograms(
           target: [scopes.programId, scopes.asset],
           set: { type: scope.type, wildcard: scope.wildcard, inScope: scope.inScope },
         })
-        .returning();
+        .returning({ id: scopes.id, isNew: sql<boolean>`(xmax = 0)` });
 
       if (!insertedScope || !scope.inScope) continue;
 
       if (scope.wildcard) {
+        if (!insertedScope.isNew) continue;
         // Strip the *. prefix for subfinder
         const baseDomain = scope.asset.replace(/^\*\./, "");
         await enumerateQueue.add(

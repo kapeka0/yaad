@@ -37,6 +37,7 @@ export interface NormalizedScope {
 export interface NormalizedProgram {
   programName: string;
   platform: string;
+  url?: string;
   offersReward?: boolean;
   scopes: NormalizedScope[];
 }

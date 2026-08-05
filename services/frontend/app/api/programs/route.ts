@@ -12,6 +12,7 @@ export async function GET() {
         id: programs.id,
         name: programs.name,
         platform: programs.platform,
+        url: programs.url,
       })
       .from(programs)
       .orderBy(programs.name);

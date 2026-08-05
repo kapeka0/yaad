@@ -1,7 +1,6 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useRef } from "react";
 import { useInView } from "react-intersection-observer";
@@ -19,11 +18,18 @@ interface Tech {
   icon: string;
 }
 
+interface Program {
+  id: number;
+  name: string;
+  platform: string;
+  url: string | null;
+}
+
 interface Asset {
   id: number;
   domain: string;
   firstSeen: string;
-  program: { id: number; name: string; platform: string };
+  program: Program;
   technologies: Tech[];
 }
 
@@ -38,6 +44,49 @@ const fetcher = (url: string) => fetch(url).then((r) => r.json());
 function domainUrl(domain: string): string {
   if (/^https?:\/\//i.test(domain)) return domain;
   return `https://${domain.replace(/^\*\./, "")}`;
+}
+
+function publicProgramUrl(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === "https:" || parsed.protocol === "http:" ? parsed.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function ProgramLink({ program }: { program: Program }) {
+  const url = publicProgramUrl(program.url);
+  const content = (
+    <>
+      <span className="truncate">{program.name}</span>
+      <PlatformIcon platform={program.platform} />
+    </>
+  );
+
+  if (!url) {
+    return (
+      <span
+        className="inline-flex max-w-full items-center gap-1.5 text-muted-foreground"
+        title={`${program.name} has no public program page`}
+      >
+        {content}
+      </span>
+    );
+  }
+
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-flex max-w-full items-center gap-1.5 text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
+      title={`Open ${program.name} on ${program.platform}`}
+    >
+      {content}
+    </a>
+  );
 }
 
 function buildUrl(base: URLSearchParams, cursor?: number) {
@@ -153,14 +202,7 @@ export function AssetsTable() {
                   </a>
                 </td>
                 <td className="px-3 py-2">
-                  <Link
-                    href={`/?program=${encodeURIComponent(asset.program.name)}`}
-                    className="inline-flex max-w-full items-center gap-1.5 text-muted-foreground underline-offset-2 hover:text-primary hover:underline"
-                    title={`Filter by ${asset.program.name} (${asset.program.platform})`}
-                  >
-                    <span className="truncate">{asset.program.name}</span>
-                    <PlatformIcon platform={asset.program.platform} />
-                  </Link>
+                  <ProgramLink program={asset.program} />
                 </td>
                 <td className="px-3 py-2">
                   <TechIcons techs={asset.technologies} />

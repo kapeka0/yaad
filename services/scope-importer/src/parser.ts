@@ -18,6 +18,7 @@ function normalizeScope(asset: string, type: string, inScope: boolean): Normaliz
 function parseHackerOne(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
     name: string;
+    url?: string;
     offers_bounties?: boolean;
     targets?: {
       in_scope?: Array<{ asset_identifier: string; asset_type: string }>;
@@ -28,6 +29,7 @@ function parseHackerOne(data: unknown): NormalizedProgram[] {
   return programs.map((p) => ({
     programName: p.name,
     platform: "hackerone",
+    url: p.url,
     offersReward: p.offers_bounties ?? true,
     scopes: [
       ...(p.targets?.in_scope ?? []).map((s) =>
@@ -44,6 +46,7 @@ function parseHackerOne(data: unknown): NormalizedProgram[] {
 function parseBugcrowd(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
     name: string;
+    url?: string;
     offers_bounties?: boolean;
     targets?: {
       in_scope?: Array<{ target: string; type: string }>;
@@ -54,6 +57,7 @@ function parseBugcrowd(data: unknown): NormalizedProgram[] {
   return programs.map((p) => ({
     programName: p.name,
     platform: "bugcrowd",
+    url: p.url,
     offersReward: p.offers_bounties ?? true,
     scopes: [
       ...(p.targets?.in_scope ?? []).map((s) =>
@@ -70,6 +74,7 @@ function parseBugcrowd(data: unknown): NormalizedProgram[] {
 function parseIntigriti(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
     name: string;
+    url?: string;
     offers_bounties?: boolean;
     targets?: {
       in_scope?: Array<{ endpoint: string; type: string }>;
@@ -80,6 +85,7 @@ function parseIntigriti(data: unknown): NormalizedProgram[] {
   return programs.map((p) => ({
     programName: p.name,
     platform: "intigriti",
+    url: p.url,
     offersReward: p.offers_bounties ?? true,
     scopes: [
       ...(p.targets?.in_scope ?? []).map((s) =>
@@ -95,22 +101,26 @@ function parseIntigriti(data: unknown): NormalizedProgram[] {
 // YesWeHack format
 function parseYesWeHack(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
+    id: string;
     name: string;
-    offers_bounties?: boolean;
-    scopes?: Array<{ scope: string; scope_type: string }>;
-    out_of_scope?: Array<{ scope: string; scope_type: string }>;
+    max_bounty?: number;
+    targets?: {
+      in_scope?: Array<{ target: string; type: string }>;
+      out_of_scope?: Array<{ target: string; type: string }>;
+    };
   }>;
 
   return programs.map((p) => ({
     programName: p.name,
     platform: "yeswehack",
-    offersReward: p.offers_bounties ?? true,
+    url: `https://yeswehack.com/programs/${encodeURIComponent(p.id)}`,
+    offersReward: (p.max_bounty ?? 0) > 0,
     scopes: [
-      ...(p.scopes ?? []).map((s) =>
-        normalizeScope(s.scope, s.scope_type, true)
+      ...(p.targets?.in_scope ?? []).map((s) =>
+        normalizeScope(s.target, s.type, true)
       ),
-      ...(p.out_of_scope ?? []).map((s) =>
-        normalizeScope(s.scope, s.scope_type, false)
+      ...(p.targets?.out_of_scope ?? []).map((s) =>
+        normalizeScope(s.target, s.type, false)
       ),
     ],
   }));
@@ -120,23 +130,25 @@ function parseYesWeHack(data: unknown): NormalizedProgram[] {
 function parseFederacy(data: unknown): NormalizedProgram[] {
   const programs = data as Array<{
     name: string;
-    offers_bounties?: boolean;
+    url?: string;
+    offers_awards?: boolean;
     targets?: {
-      in_scope?: Array<{ asset_identifier: string; asset_type: string }>;
-      out_of_scope?: Array<{ asset_identifier: string; asset_type: string }>;
+      in_scope?: Array<{ target: string; type: string }>;
+      out_of_scope?: Array<{ target: string; type: string }>;
     };
   }>;
 
   return programs.map((p) => ({
     programName: p.name,
     platform: "federacy",
-    offersReward: p.offers_bounties ?? true,
+    url: p.url,
+    offersReward: p.offers_awards ?? true,
     scopes: [
       ...(p.targets?.in_scope ?? []).map((s) =>
-        normalizeScope(s.asset_identifier, s.asset_type, true)
+        normalizeScope(s.target, s.type, true)
       ),
       ...(p.targets?.out_of_scope ?? []).map((s) =>
-        normalizeScope(s.asset_identifier, s.asset_type, false)
+        normalizeScope(s.target, s.type, false)
       ),
     ],
   }));
