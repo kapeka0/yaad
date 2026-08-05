@@ -1,7 +1,7 @@
 import { Worker, Queue } from "bullmq";
 import { loadConfig } from "@yaad/config";
 import { getDb } from "@yaad/db";
-import { getRedisOptions, QUEUES } from "@yaad/queue";
+import { DEFAULT_WORKER_OPTIONS, getRedisOptions, QUEUES } from "@yaad/queue";
 import type { CollectJsJob, AnalyzeJsJob, ScanHttpJob, EnumerateSubdomainsJob } from "@yaad/queue";
 import { BlobStore } from "@yaad/storage";
 import { processCollectJs, type JsWorkerDeps } from "./processor.js";
@@ -39,6 +39,7 @@ async function main(): Promise<void> {
     {
       connection: redisOptions,
       concurrency: config.workerConcurrency,
+      ...DEFAULT_WORKER_OPTIONS,
     }
   );
 

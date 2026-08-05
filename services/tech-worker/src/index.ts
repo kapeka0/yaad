@@ -1,7 +1,7 @@
 import { Worker } from "bullmq";
 import { loadConfig } from "@yaad/config";
 import { getDb } from "@yaad/db";
-import { getRedisOptions, QUEUES } from "@yaad/queue";
+import { DEFAULT_WORKER_OPTIONS, getRedisOptions, QUEUES } from "@yaad/queue";
 import type { DetectTechnologyJob } from "@yaad/queue";
 import { processDetectTechnology } from "./processor.js";
 
@@ -23,6 +23,7 @@ async function main(): Promise<void> {
     {
       connection: redisOptions,
       concurrency: config.techWorkerConcurrency,
+      ...DEFAULT_WORKER_OPTIONS,
     }
   );
 
