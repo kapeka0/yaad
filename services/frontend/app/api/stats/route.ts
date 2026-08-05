@@ -86,7 +86,7 @@ async function computeStats(): Promise<StatsPayload> {
         (SELECT count(*) FROM assets WHERE resolved)::int                 AS resolved_assets,
         COALESCE(max(row_estimate) FILTER (WHERE relname = 'web_services'), 0)::bigint AS web_services,
         COALESCE(max(row_estimate) FILTER (WHERE relname = 'javascript_files'), 0)::bigint AS javascript_files,
-        COALESCE(max(row_estimate) FILTER (WHERE relname = 'js_libraries'), 0)::bigint AS js_libraries,
+        (SELECT count(*) FROM js_libraries)::int                          AS js_libraries,
         (SELECT count(*) FROM js_libraries WHERE vulnerabilities IS NOT NULL)::int AS vulnerable_libraries,
         COALESCE(max(row_estimate) FILTER (WHERE relname = 'technologies'), 0)::bigint AS technologies,
         COALESCE(max(row_estimate) FILTER (WHERE relname = 'endpoints'), 0)::bigint AS endpoints,
