@@ -41,7 +41,7 @@ function TechIcon({ tech }: { tech: Tech }) {
               height={16}
               loading="lazy"
               decoding="async"
-              className="size-4 rounded-sm bg-white object-contain p-0.5"
+              className="size-4 rounded-sm object-contain"
               onError={() => {
                 if (!usingLocalFallback && localFallbackSrc && localFallbackSrc !== primarySrc) {
                   setUsingLocalFallback(true);
