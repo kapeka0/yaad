@@ -27,6 +27,7 @@ async function main(): Promise<void> {
     enumerateQueue,
     jsMaxBytes: config.jsMaxBytes,
     storeJsBlobs: config.storeJsBlobs,
+    detectJsLibraries: config.detectJsLibraries,
     maxRecursionDepth: config.maxRecursionDepth,
   };
 

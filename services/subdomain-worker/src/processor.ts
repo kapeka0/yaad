@@ -11,6 +11,7 @@ export interface EnumOptions {
   pdcpApiKey?: string;
   crtShEnabled: boolean;
   gauEnabled: boolean;
+  subfinderDeep: boolean;
 }
 
 function normalizeHost(raw: string): string | null {
@@ -43,7 +44,9 @@ export async function processEnumerateSubdomains(
   };
 
   const tasks: Array<Promise<void>> = [
-    runSubfinder(domain).then((hs) => hs.forEach((h) => record(normalizeHost(h), "subfinder"))),
+    runSubfinder(domain, opts.subfinderDeep).then((hs) =>
+      hs.forEach((h) => record(normalizeHost(h), "subfinder"))
+    ),
   ];
   if (opts.crtShEnabled) {
     tasks.push(getCrtSh(domain).then((hs) => hs.forEach((h) => record(normalizeHost(h), "crtsh"))));

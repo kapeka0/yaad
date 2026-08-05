@@ -20,10 +20,14 @@ export interface AppConfig {
   maxRecursionDepth: number;
   crtShEnabled: boolean;
   gauEnabled: boolean;
+  // subfinder -all -recursive (heavier). Disable on low-power hosts.
+  subfinderDeep: boolean;
   // JS storage
   storage: StorageSettings;
   jsMaxBytes: number;
   storeJsBlobs: boolean;
+  // Run retire.js library/CVE fingerprinting (CPU-heavy). Disable to go lighter.
+  detectJsLibraries: boolean;
   // Continuous re-scan scheduler
   scheduler: SchedulerSettings;
 }
@@ -64,6 +68,7 @@ export function loadConfig(): AppConfig {
     maxRecursionDepth: parseInt(process.env.MAX_RECURSION_DEPTH ?? "2", 10),
     crtShEnabled: boolEnv(process.env.CRTSH_ENABLED, true),
     gauEnabled: boolEnv(process.env.GAU_ENABLED, true),
+    subfinderDeep: boolEnv(process.env.SUBFINDER_DEEP, true),
     storage: {
       endpoint: process.env.S3_ENDPOINT ?? "minio:9000",
       accessKey: process.env.S3_ACCESS_KEY ?? "yaad",
@@ -73,6 +78,7 @@ export function loadConfig(): AppConfig {
     },
     jsMaxBytes: parseInt(process.env.JS_MAX_BYTES ?? "10485760", 10), // 10 MB
     storeJsBlobs: boolEnv(process.env.STORE_JS_BLOBS, true),
+    detectJsLibraries: boolEnv(process.env.DETECT_JS_LIBRARIES, true),
     scheduler: {
       tickMs: parseInt(process.env.SCHEDULER_TICK_MS ?? "900000", 10), // 15 min
       batchSize: parseInt(process.env.SCHEDULER_BATCH_SIZE ?? "500", 10),

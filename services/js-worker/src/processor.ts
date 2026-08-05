@@ -24,6 +24,7 @@ export interface JsWorkerDeps {
   enumerateQueue: Queue<EnumerateSubdomainsJob>;
   jsMaxBytes: number;
   storeJsBlobs: boolean;
+  detectJsLibraries: boolean;
   maxRecursionDepth: number;
 }
 
@@ -129,7 +130,10 @@ async function analyzeBody(
     .where(eq(javascriptFiles.id, jsId));
 
   // Library fingerprinting: retire.js (with CVEs) + inline banners.
-  const libs = dedupeLibraries([...(await runRetire(body)), ...extractInlineLibraries(text)]);
+  // Skipped entirely in light mode (retire.js is the CPU-heaviest step).
+  const libs = deps.detectJsLibraries
+    ? dedupeLibraries([...(await runRetire(body)), ...extractInlineLibraries(text)])
+    : [];
   for (const lib of libs) {
     try {
       await db

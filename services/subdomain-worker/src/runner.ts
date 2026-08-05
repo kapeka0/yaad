@@ -11,16 +11,17 @@ function isHostname(value: string): boolean {
   );
 }
 
-/** Passive + recursive subdomain enumeration via subfinder (all sources). */
-export async function runSubfinder(domain: string): Promise<string[]> {
+/**
+ * Subdomain enumeration via subfinder. `deep` adds `-all -recursive` (more
+ * sources + recursion, heavier); disable it on low-power hosts.
+ */
+export async function runSubfinder(domain: string, deep = true): Promise<string[]> {
   const outputFile = join(tmpdir(), `subfinder-${randomUUID()}.txt`);
+  const args = ["-d", domain, "-o", outputFile, "-silent"];
+  if (deep) args.push("-all", "-recursive");
 
   return new Promise((resolve) => {
-    const proc = spawn(
-      "subfinder",
-      ["-d", domain, "-all", "-recursive", "-o", outputFile, "-silent"],
-      { stdio: ["ignore", "pipe", "pipe"] }
-    );
+    const proc = spawn("subfinder", args, { stdio: ["ignore", "pipe", "pipe"] });
 
     proc.on("close", async () => {
       try {

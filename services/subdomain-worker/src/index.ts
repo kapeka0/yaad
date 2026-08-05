@@ -19,6 +19,7 @@ async function main(): Promise<void> {
         pdcpApiKey: config.pdcpApiKey,
         crtShEnabled: config.crtShEnabled,
         gauEnabled: config.gauEnabled,
+        subfinderDeep: config.subfinderDeep,
       });
     },
     {

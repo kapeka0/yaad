@@ -15,6 +15,7 @@ interface Stats {
     javascriptFiles: number;
     endpoints: number;
     technologies: number;
+    estimated: boolean;
   };
   libraries: { detected: number; vulnerable: number };
   storage: { uniqueBlobs: number; originalBytes: number; storedBytes: number; ratio: number };
@@ -22,7 +23,11 @@ interface Stats {
   lastScan: string | null;
 }
 
-const fetcher = (url: string) => fetch(url).then((r) => r.json());
+const fetcher = async (url: string): Promise<Stats> => {
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Stats request failed (${response.status})`);
+  return response.json() as Promise<Stats>;
+};
 
 function formatBytes(n: number): string {
   if (!n) return "0 B";
@@ -38,6 +43,8 @@ function formatNum(n: number): string {
 function timeAgo(iso: string | null): string {
   if (!iso) return "never";
   const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (!Number.isFinite(s)) return "unknown";
+  if (s < 0) return "just now";
   if (s < 60) return `${s}s ago`;
   if (s < 3600) return `${Math.floor(s / 60)}m ago`;
   if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
@@ -66,7 +73,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 export default function StatsPage() {
   const { data, error, isLoading } = useSWR<Stats>("/api/stats", fetcher, {
-    refreshInterval: 5000,
+    refreshInterval: 30_000,
+    dedupingInterval: 30_000,
   });
 
   return (
@@ -97,6 +105,9 @@ export default function StatsPage() {
       {data && (
         <>
           <Section title="Database">
+            {data.database.estimated && (
+              <p className="text-[10px] font-mono text-muted-foreground">Row counts are low-overhead estimates.</p>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
               <Tile label="DB size" value={formatBytes(data.database.sizeBytes)} />
               <Tile label="Programs" value={formatNum(data.database.programs)} />
