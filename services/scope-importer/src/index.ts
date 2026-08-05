@@ -69,7 +69,7 @@ async function main(): Promise<void> {
 
   if (process.env.PROGRAM_URLS_ONLY === "true") {
     await runProgramUrlImport();
-    return;
+    process.exit(0);
   }
 
   while (true) {
