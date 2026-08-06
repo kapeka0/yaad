@@ -4,17 +4,9 @@ import { db as getDbInstance } from "@/lib/db";
 import { getRedisOptions, QUEUES, DEFAULT_JOB_OPTIONS } from "@yaad/queue";
 import { programs, scopes, assets, type Scope, type Asset } from "@yaad/db";
 import { eq, sql } from "drizzle-orm";
+import { normalizeAssetDomain } from "@yaad/types";
 
 export const runtime = "nodejs";
-
-function normalizeAssetDomain(raw: string): string {
-  try {
-    if (raw.startsWith("http://") || raw.startsWith("https://")) {
-      return new URL(raw).hostname;
-    }
-  } catch { /* ignore */ }
-  return raw.trim().toLowerCase();
-}
 
 function findMatchingScope(domain: string, programScopes: Scope[]): Scope | undefined {
   // Try exact match first
@@ -77,11 +69,15 @@ export async function POST(req: NextRequest) {
     const scanQueue = new Queue(QUEUES.SCAN_HTTP, { connection: redisOptions });
     const insertedAssets: Asset[] = [];
     let newAssets = 0;
+    let skippedAssets = 0;
     let enqueuedJobs = 0;
 
     for (const rawSub of subdomainsList) {
       const domain = normalizeAssetDomain(rawSub);
-      if (!domain) continue;
+      if (!domain) {
+        skippedAssets++;
+        continue;
+      }
 
       // 3. Match against program scopes or create new scope
       const matchedScope = findMatchingScope(domain, programScopes);
@@ -158,6 +154,7 @@ export async function POST(req: NextRequest) {
       processed: subdomainsList.length,
       linked: insertedAssets.length,
       inserted: newAssets,
+      skipped: skippedAssets,
       enqueued: enqueuedJobs,
     });
   } catch (err: unknown) {

@@ -4,16 +4,7 @@ import type { Db } from "@yaad/db";
 import { programs, scopes, assets } from "@yaad/db";
 import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
 import type { EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
-import type { NormalizedProgram } from "@yaad/types";
-
-function normalizeAssetDomain(raw: string): string {
-  try {
-    if (raw.startsWith("http://") || raw.startsWith("https://")) {
-      return new URL(raw).hostname;
-    }
-  } catch { /* not a valid URL, use as-is */ }
-  return raw;
-}
+import { normalizeAssetDomain, type NormalizedProgram } from "@yaad/types";
 
 export async function updateProgramUrls(
   db: Db,
@@ -100,6 +91,7 @@ export async function importPrograms(
 
         // Non-wildcard domain: upsert asset and enqueue scan_http
         const domain = normalizeAssetDomain(scope.asset);
+        if (!domain) continue;
         const [asset] = await db
           .insert(assets)
           .values({
@@ -108,7 +100,8 @@ export async function importPrograms(
           })
           .onConflictDoUpdate({
             target: assets.domain,
-            set: { lastSeen: new Date() },
+            // Importing a root scope is an explicit ownership decision.
+            set: { scopeId: insertedScope.id, lastSeen: new Date() },
           })
           .returning({ id: assets.id, isNew: sql<boolean>`(xmax = 0)` });
 

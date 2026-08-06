@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { cn } from "@/lib/utils";
+import { SearchCombobox } from "@/components/ui/combobox";
 
 interface ProgramOption {
   id: number;
@@ -39,6 +40,24 @@ export default function ManageProgramsPage() {
   const [subs, setSubs] = useState("");
   const [savingSubs, setSavingSubs] = useState(false);
   const [subsMsg, setSubsMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  // Build searchable labels and O(1) lookup maps only when the program list
+  // changes, not on every textarea keystroke.
+  const programOptions = useMemo(() => {
+    const labels: string[] = [];
+    const idByLabel = new Map<string, string>();
+    const labelById = new Map<string, string>();
+    for (const program of programs) {
+      const label = `${program.name} (${program.platform})`;
+      const id = String(program.id);
+      labels.push(label);
+      idByLabel.set(label, id);
+      labelById.set(id, label);
+    }
+    return { labels, idByLabel, labelById };
+  }, [programs]);
+
+  const selectedProgramLabel = programOptions.labelById.get(programId) ?? "";
 
   const loadPrograms = useCallback(async () => {
     try {
@@ -97,7 +116,7 @@ export default function ManageProgramsPage() {
       if (!res.ok) throw new Error(data.error || "Failed");
       setSubsMsg({
         ok: true,
-        text: `Processed ${data.processed} · ${data.linked ?? data.inserted} linked · ${data.inserted} new · ${data.enqueued} scans queued`,
+        text: `Processed ${data.processed} · ${data.linked ?? data.inserted} linked · ${data.inserted} new · ${data.skipped ?? 0} skipped · ${data.enqueued} scans queued`,
       });
       setSubs("");
     } catch (err) {
@@ -150,22 +169,15 @@ export default function ManageProgramsPage() {
       {/* Bulk subdomains */}
       <form onSubmit={submitSubs} className="space-y-3 border-t border-border pt-6">
         <h2 className="text-xs font-mono font-semibold text-foreground">Bulk subdomains</h2>
-        <select
-          className={inputCls}
-          value={programId}
-          onChange={(e) => setProgramId(e.target.value)}
+        <SearchCombobox
+          options={programOptions.labels}
+          value={selectedProgramLabel}
+          onChange={(label) => setProgramId(programOptions.idByLabel.get(label) ?? "")}
+          placeholder={programs.length === 0 ? "No programs yet" : "Select program"}
+          searchPlaceholder="Search program..."
+          triggerClassName="w-full"
           disabled={programs.length === 0}
-        >
-          {programs.length === 0 ? (
-            <option value="">No programs yet</option>
-          ) : (
-            programs.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name} ({p.platform})
-              </option>
-            ))
-          )}
-        </select>
+        />
         <textarea
           className={cn(inputCls, "resize-y")}
           rows={6}

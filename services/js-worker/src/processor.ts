@@ -9,7 +9,8 @@ import type {
   ScanHttpJob,
   EnumerateSubdomainsJob,
 } from "@yaad/queue";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
+import { normalizeAssetDomain } from "@yaad/types";
 import { runGetJS } from "./runner.js";
 import { fetchJs } from "./fetch.js";
 import { runRetire, type DetectedLibrary } from "./retire.js";
@@ -178,15 +179,27 @@ async function mineSubdomains(deps: JsWorkerDeps, ctx: ServiceContext, text: str
   const nextDepth = ctx.depth + 1;
   const found = extractSubdomains(text, [ctx.rootDomain]);
 
-  for (const host of found) {
+  for (const rawHost of found) {
+    // Wildcards and fragments extracted from JavaScript are not concrete
+    // scan targets. Keep them out of the global assets table.
+    if (rawHost.includes("*")) continue;
+    const host = normalizeAssetDomain(rawHost);
+    if (!host) continue;
+
     try {
       const [inserted] = await db
         .insert(assets)
         .values({ scopeId: ctx.scopeId, domain: host, source: "js", depth: nextDepth })
-        .onConflictDoNothing()
-        .returning();
+        .onConflictDoUpdate({
+          target: assets.domain,
+          set: {
+            scopeId: sql`coalesce(${assets.scopeId}, ${ctx.scopeId})`,
+            lastSeen: new Date(),
+          },
+        })
+        .returning({ id: assets.id, isNew: sql<boolean>`(xmax = 0)` });
 
-      if (!inserted) continue;
+      if (!inserted?.isNew) continue;
 
       await deps.scanQueue.add(
         "scan_http",

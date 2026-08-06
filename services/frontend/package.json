@@ -18,6 +18,7 @@
     "@yaad/config": "workspace:*",
     "@yaad/db": "workspace:*",
     "@yaad/queue": "workspace:*",
+    "@yaad/types": "workspace:*",
     "bullmq": "^5.7.8",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

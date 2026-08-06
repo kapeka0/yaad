@@ -13,6 +13,7 @@
     "@yaad/db": "workspace:*",
     "@yaad/queue": "workspace:*",
     "@yaad/storage": "workspace:*",
+    "@yaad/types": "workspace:*",
     "bullmq": "^5.7.8",
     "drizzle-orm": "^0.30.10"
   },

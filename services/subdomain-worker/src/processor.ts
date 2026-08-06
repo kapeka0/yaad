@@ -100,6 +100,9 @@ export async function processEnumerateSubdomains(
         .onConflictDoUpdate({
           target: assets.domain,
           set: {
+            // Preserve an existing program, but adopt newly discovered legacy
+            // assets that do not have any scope yet.
+            scopeId: sql`coalesce(${assets.scopeId}, ${scopeId})`,
             ip: ipOf.get(host) ?? null,
             resolved,
             lastSeen: new Date(),

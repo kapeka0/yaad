@@ -8,6 +8,7 @@ import useSWRInfinite from "swr/infinite";
 import { Skeleton } from "./ui/skeleton";
 import { TechIcons } from "./tech-icons";
 import { PlatformIcon } from "./platform-icon";
+import { normalizeAssetDomain } from "@yaad/types";
 
 const SKELETON_WIDTHS = ["w-full","w-10/12","w-9/12","w-8/12","w-7/12","w-6/12","w-5/12","w-4/12"];
 
@@ -41,9 +42,9 @@ interface Page {
 
 const fetcher = (url: string) => fetch(url).then((r) => r.json());
 
-function domainUrl(domain: string): string {
-  if (/^https?:\/\//i.test(domain)) return domain;
-  return `https://${domain.replace(/^\*\./, "")}`;
+function domainUrl(domain: string): string | null {
+  const hostname = normalizeAssetDomain(domain);
+  return hostname ? `https://${hostname}` : null;
 }
 
 function publicProgramUrl(url: string | null): string | null {
@@ -182,42 +183,54 @@ export function AssetsTable() {
                 </td>
               </tr>
             )}
-            {rows.map((asset) => (
-              <tr
-                key={asset.id}
-                className={cn(
-                  "border-b border-border last:border-0",
-                  "hover:bg-muted/30 transition-colors",
-                )}
-              >
-                <td className="px-3 py-2 text-foreground max-w-xs">
-                  <a
-                    href={domainUrl(asset.domain)}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="block truncate underline-offset-2 hover:text-primary hover:underline"
-                    title={`Open ${asset.domain}`}
-                  >
-                    {asset.domain}
-                  </a>
-                </td>
-                <td className="px-3 py-2">
-                  <ProgramLink program={asset.program} />
-                </td>
-                <td className="px-3 py-2">
-                  <TechIcons techs={asset.technologies} />
-                </td>
-                <td className="px-3 py-2 text-muted-foreground">
-                  <span className="shrink-0 text-nowrap">
-                    {new Date(asset.firstSeen).toLocaleDateString("en-US", {
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </span>
-                </td>
-              </tr>
-            ))}
+            {rows.map((asset) => {
+              const href = domainUrl(asset.domain);
+              return (
+                <tr
+                  key={asset.id}
+                  className={cn(
+                    "border-b border-border last:border-0",
+                    "hover:bg-muted/30 transition-colors",
+                  )}
+                >
+                  <td className="px-3 py-2 text-foreground max-w-xs">
+                    {href ? (
+                      <a
+                        href={href}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block truncate underline-offset-2 hover:text-primary hover:underline"
+                        title={`Open ${asset.domain}`}
+                      >
+                        {asset.domain}
+                      </a>
+                    ) : (
+                      <span
+                        className="block truncate text-muted-foreground"
+                        title={`${asset.domain} is not a valid hostname`}
+                      >
+                        {asset.domain}
+                      </span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <ProgramLink program={asset.program} />
+                  </td>
+                  <td className="px-3 py-2">
+                    <TechIcons techs={asset.technologies} />
+                  </td>
+                  <td className="px-3 py-2 text-muted-foreground">
+                    <span className="shrink-0 text-nowrap">
+                      {new Date(asset.firstSeen).toLocaleDateString("en-US", {
+                        year: "numeric",
+                        month: "short",
+                        day: "numeric",
+                      })}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>

@@ -41,3 +41,5 @@ export interface NormalizedProgram {
   offersReward?: boolean;
   scopes: NormalizedScope[];
 }
+
+export { normalizeAssetDomain } from "./domain.js";

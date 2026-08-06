@@ -4,17 +4,9 @@ import { db as getDbInstance } from "@/lib/db";
 import { getRedisOptions, QUEUES, DEFAULT_JOB_OPTIONS } from "@yaad/queue";
 import { programs, scopes, assets, type Scope } from "@yaad/db";
 import { sql } from "drizzle-orm";
+import { normalizeAssetDomain } from "@yaad/types";
 
 export const runtime = "nodejs";
-
-function normalizeAssetDomain(raw: string): string {
-  try {
-    if (raw.startsWith("http://") || raw.startsWith("https://")) {
-      return new URL(raw).hostname;
-    }
-  } catch { /* ignore */ }
-  return raw.trim();
-}
 
 export async function POST(req: NextRequest) {
   try {
@@ -98,6 +90,7 @@ export async function POST(req: NextRequest) {
       } else {
         // Non-wildcard domain: upsert asset and enqueue scan_http
         const domain = normalizeAssetDomain(scopeStr);
+        if (!domain) continue;
         const [asset] = await dbInstance
           .insert(assets)
           .values({
@@ -107,7 +100,7 @@ export async function POST(req: NextRequest) {
           })
           .onConflictDoUpdate({
             target: assets.domain,
-            set: { lastSeen: new Date() },
+            set: { scopeId: insertedScope.id, source: "manual", lastSeen: new Date() },
           })
           .returning({ id: assets.id, isNew: sql<boolean>`(xmax = 0)` });
 

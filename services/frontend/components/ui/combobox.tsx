@@ -12,6 +12,8 @@ interface SearchComboboxProps {
   placeholder?: string;
   searchPlaceholder?: string;
   triggerClassName?: string;
+  disabled?: boolean;
+  maxVisibleOptions?: number;
 }
 
 export function SearchCombobox({
@@ -21,6 +23,8 @@ export function SearchCombobox({
   placeholder = "All",
   searchPlaceholder = "Search...",
   triggerClassName,
+  disabled = false,
+  maxVisibleOptions = 100,
 }: SearchComboboxProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -36,6 +40,7 @@ export function SearchCombobox({
   const filtered = search
     ? options.filter((o) => o.toLowerCase().includes(search.toLowerCase()))
     : options;
+  const visibleOptions = filtered.slice(0, maxVisibleOptions);
 
   const label = value || placeholder;
 
@@ -48,10 +53,11 @@ export function SearchCombobox({
     <Popover.Root open={open} onOpenChange={setOpen}>
       <Popover.Trigger asChild>
         <button
+          disabled={disabled}
           className={cn(
             "flex items-center gap-1 px-3 py-1.5 text-xs rounded-md border border-border bg-background",
             "focus:outline-none focus:ring-1 focus:ring-ring font-mono text-foreground",
-            "justify-between min-w-0",
+            "justify-between min-w-0 disabled:cursor-not-allowed disabled:opacity-50",
             triggerClassName
           )}
         >
@@ -93,7 +99,7 @@ export function SearchCombobox({
                 {!value && <Check className="w-3 h-3" />}
               </button>
             </li>
-            {filtered.map((opt) => (
+            {visibleOptions.map((opt) => (
               <li key={opt}>
                 <button
                   onClick={() => select(opt)}
@@ -110,6 +116,11 @@ export function SearchCombobox({
             ))}
             {filtered.length === 0 && (
               <li className="px-2 py-1 text-xs text-muted-foreground font-mono">No results</li>
+            )}
+            {filtered.length > visibleOptions.length && (
+              <li className="px-2 py-1 text-xs text-muted-foreground font-mono">
+                {filtered.length - visibleOptions.length} more results. Type to narrow the list.
+              </li>
             )}
           </ul>
         </Popover.Content>

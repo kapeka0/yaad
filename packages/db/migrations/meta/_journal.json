@@ -50,6 +50,13 @@
       "when": 1785924000000,
       "tag": "0006_add_program_url",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1786019563140,
+      "tag": "0007_relink_asset_scopes",
+      "breakpoints": true
     }
   ]
 }
