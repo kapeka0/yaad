@@ -1,0 +1,50 @@
+diff --git a/api.js b/api.js
+index b6c7764..9cc1429 100644
+--- a/api.js
++++ b/api.js
+@@ -178,6 +178,8 @@ app.get("/health", (req, res) => {
+  */
+ // Main analyze endpoint
+ app.post("/analyze", async (req, res) => {
++  let wappalyzer;
++
+   try {
+     console.log(
+       pc.green(`INFO`) +
+@@ -235,7 +237,7 @@ app.post("/analyze", async (req, res) => {
+       console.log("Request headers:", req.headers);
+     }
+     // Initialize wappalyzer
+-    const wappalyzer = new Wappalyzer(wappalyzerOptions);
++    wappalyzer = new Wappalyzer(wappalyzerOptions);
+ 
+     await wappalyzer.init();
+ 
+@@ -244,8 +246,6 @@ app.post("/analyze", async (req, res) => {
+ 
+     const results = await site.analyze();
+ 
+-    // Clean up resources
+-    await wappalyzer.destroy();
+     console.log(
+       pc.green(`INFO`) +
+         ` [${new Date().toISOString()}] (Cultivate API): Analysis complete for URL: ${url}`
+@@ -269,6 +269,18 @@ app.post("/analyze", async (req, res) => {
+       error: "Analysis failed",
+       message: error.message || String(error),
+     });
++  } finally {
++    if (wappalyzer) {
++      try {
++        await wappalyzer.destroy();
++      } catch (cleanupError) {
++        console.error(
++          pc.red(`ERROR`) +
++            ` [${new Date().toISOString()}] (Cultivate API): Cleanup error:`,
++          cleanupError
++        );
++      }
++    }
+   }
+ });
+ 

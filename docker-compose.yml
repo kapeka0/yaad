@@ -45,6 +45,8 @@ services:
       context: .
       dockerfile: docker/Dockerfile.cultivate
     restart: unless-stopped
+    init: true
+    pids_limit: 512
     shm_size: '256m'
     environment:
       PORT: 3000
@@ -106,7 +108,7 @@ services:
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      WORKER_CONCURRENCY: ${SUBDOMAIN_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
       LOG_LEVEL: info
       # Extra passive sources (crt.sh + gau); set to "false" to disable
       CRTSH_ENABLED: ${CRTSH_ENABLED:-true}
@@ -126,7 +128,7 @@ services:
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      WORKER_CONCURRENCY: ${HTTPX_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
       LOG_LEVEL: info
     depends_on:
       api:
@@ -140,7 +142,7 @@ services:
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      WORKER_CONCURRENCY: ${JS_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
       LOG_LEVEL: info
       # JS blob storage (MinIO, content-addressable + zstd + dedup)
       STORE_JS_BLOBS: ${STORE_JS_BLOBS:-true}
@@ -166,7 +168,7 @@ services:
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-5}
+      WORKER_CONCURRENCY: ${ENDPOINT_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
       LOG_LEVEL: info
     depends_on:
       api:
