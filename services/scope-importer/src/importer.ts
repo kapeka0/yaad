@@ -74,8 +74,8 @@ export async function importPrograms(
 
       if (scope.wildcard) {
         if (!insertedScope.isNew) continue;
-        // Strip the *. prefix for subfinder
-        const baseDomain = scope.asset.replace(/^\*\./, "");
+        const baseDomain = normalizeAssetDomain(scope.asset);
+        if (!baseDomain) continue;
         await enumerateQueue.add(
           "enumerate_subdomains",
           { domain: baseDomain, scopeId: insertedScope.id },

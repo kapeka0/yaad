@@ -56,7 +56,10 @@ export async function POST(req: NextRequest) {
     const enqueuedJobsCount = { enumerate: 0, scan: 0 };
 
     for (const scopeStr of scopeList) {
-      const isWildcard = scopeStr.startsWith("*.");
+      const domain = normalizeAssetDomain(scopeStr);
+      if (!domain) continue;
+      const isWildcard = /^\*+\.?/.test(scopeStr);
+      const scopeAsset = isWildcard ? `*.${domain}` : domain;
       const type = "domain"; // Default to domain for manual inputs
 
       // 2. Upsert scope
@@ -64,7 +67,7 @@ export async function POST(req: NextRequest) {
         .insert(scopes)
         .values({
           programId: program.id,
-          asset: scopeStr,
+          asset: scopeAsset,
           type,
           wildcard: isWildcard,
           inScope: true,
@@ -80,17 +83,14 @@ export async function POST(req: NextRequest) {
 
       if (isWildcard) {
         // Enqueue wildcard subdomain enumeration
-        const baseDomain = scopeStr.replace(/^\*\./, "");
         await enumerateQueue.add(
           "enumerate_subdomains",
-          { domain: baseDomain, scopeId: insertedScope.id },
+          { domain, scopeId: insertedScope.id },
           DEFAULT_JOB_OPTIONS
         );
         enqueuedJobsCount.enumerate++;
       } else {
         // Non-wildcard domain: upsert asset and enqueue scan_http
-        const domain = normalizeAssetDomain(scopeStr);
-        if (!domain) continue;
         const [asset] = await dbInstance
           .insert(assets)
           .values({

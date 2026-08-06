@@ -6,6 +6,11 @@ import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
 import type { EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
 import type { SchedulerSettings } from "@yaad/config";
 
+const HOSTNAME_PATTERN =
+  "^([A-Za-z0-9_][A-Za-z0-9_-]{0,62})([.][A-Za-z0-9_][A-Za-z0-9_-]{0,62})*[.]?$";
+const WILDCARD_HOSTNAME_PATTERN =
+  "^[*][.]([A-Za-z0-9_][A-Za-z0-9_-]{0,62})([.][A-Za-z0-9_][A-Za-z0-9_-]{0,62})*[.]?$";
+
 function log(level: string, msg: string, extra: Record<string, unknown> = {}): void {
   console.log(JSON.stringify({ level, msg, ...extra }));
 }
@@ -30,6 +35,7 @@ export async function refreshStaleScopes(
       and(
         eq(scopes.wildcard, true),
         eq(scopes.inScope, true),
+        sql`${scopes.asset} ~ ${WILDCARD_HOSTNAME_PATTERN}`,
         or(isNull(scopes.lastEnumeratedAt), lt(scopes.lastEnumeratedAt, staleBefore))
       )
     )
@@ -73,7 +79,12 @@ export async function refreshStaleAssets(
   const rows = await db
     .select({ id: assets.id, domain: assets.domain })
     .from(assets)
-    .where(or(isNull(assets.lastScannedAt), lt(assets.lastScannedAt, staleBefore)))
+    .where(
+      and(
+        sql`${assets.domain} ~ ${HOSTNAME_PATTERN}`,
+        or(isNull(assets.lastScannedAt), lt(assets.lastScannedAt, staleBefore))
+      )
+    )
     // Never-scanned first, then oldest first.
     .orderBy(sql`${assets.lastScannedAt} asc nulls first`)
     .limit(settings.batchSize);
