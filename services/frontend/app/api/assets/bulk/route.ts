@@ -76,6 +76,7 @@ export async function POST(req: NextRequest) {
 
     const scanQueue = new Queue(QUEUES.SCAN_HTTP, { connection: redisOptions });
     const insertedAssets: Asset[] = [];
+    let newAssets = 0;
     let enqueuedJobs = 0;
 
     for (const rawSub of subdomainsList) {
@@ -118,7 +119,10 @@ export async function POST(req: NextRequest) {
         })
         .onConflictDoUpdate({
           target: assets.domain,
-          set: { lastSeen: new Date() },
+          // A manual import is an explicit program assignment. Existing
+          // domains (including previously unscoped discoveries) must be
+          // linked to the selected program instead of only being touched.
+          set: { scopeId, source: "manual", lastSeen: new Date() },
         })
         .returning({ id: assets.id, isNew: sql<boolean>`(xmax = 0)` });
 
@@ -136,6 +140,7 @@ export async function POST(req: NextRequest) {
         
         // 5. Enqueue scan if it is a new asset
         if (asset.isNew) {
+          newAssets++;
           await scanQueue.add(
             "scan_http",
             { domain, assetId: asset.id },
@@ -151,7 +156,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       processed: subdomainsList.length,
-      inserted: insertedAssets.length,
+      linked: insertedAssets.length,
+      inserted: newAssets,
       enqueued: enqueuedJobs,
     });
   } catch (err: unknown) {

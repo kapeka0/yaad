@@ -97,7 +97,7 @@ export default function ManageProgramsPage() {
       if (!res.ok) throw new Error(data.error || "Failed");
       setSubsMsg({
         ok: true,
-        text: `Processed ${data.processed} · ${data.inserted} new · ${data.enqueued} scans queued`,
+        text: `Processed ${data.processed} · ${data.linked ?? data.inserted} linked · ${data.inserted} new · ${data.enqueued} scans queued`,
       });
       setSubs("");
     } catch (err) {
