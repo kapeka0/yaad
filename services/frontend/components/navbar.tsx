@@ -51,7 +51,12 @@ export function Navbar() {
             href="https://github.com/kapeka0/yaad"
             target="_blank"
             rel="noopener noreferrer"
-            className="flex items-center justify-center w-8 h-8 rounded-md text-muted-foreground hover:text-foreground transition-colors"
+            className={cn(
+              "flex items-center justify-center w-8 h-8 rounded-md",
+              "text-muted-foreground hover:text-foreground hover:bg-accent",
+              "transition-colors"
+            )}
+            aria-label="Open YAAD on GitHub"
           >
             <Image src="/images/github.svg" alt="GitHub" width={16} height={16} className="w-4 h-4" />
           </a>
