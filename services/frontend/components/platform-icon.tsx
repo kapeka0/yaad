@@ -31,7 +31,7 @@ export function PlatformIcon({ platform }: { platform: string }) {
       height={16}
       loading="lazy"
       decoding="async"
-      className="size-4 shrink-0 rounded-sm bg-white object-contain p-0.5"
+      className="size-4 shrink-0 rounded-sm object-contain"
     />
   );
 }
