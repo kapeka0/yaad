@@ -7,7 +7,8 @@ const PLATFORM_ICONS: Readonly<Record<string, string>> = {
 };
 
 export function PlatformIcon({ platform }: { platform: string }) {
-  const src = PLATFORM_ICONS[platform.trim().toLowerCase()];
+  const normalizedPlatform = platform.trim().toLowerCase();
+  const src = PLATFORM_ICONS[normalizedPlatform];
 
   if (!src) {
     return (
@@ -31,7 +32,9 @@ export function PlatformIcon({ platform }: { platform: string }) {
       height={16}
       loading="lazy"
       decoding="async"
-      className="size-4 shrink-0 rounded-sm object-contain"
+      className={`size-4 shrink-0 rounded-sm object-contain ${
+        normalizedPlatform === "hackerone" ? "dark:invert" : ""
+      }`}
     />
   );
 }
