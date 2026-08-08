@@ -9,7 +9,7 @@ import type {
   ScanHttpJob,
   EnumerateSubdomainsJob,
 } from "@yaad/queue";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { normalizeAssetDomain } from "@yaad/types";
 import { runGetJS } from "./runner.js";
 import { fetchJs } from "./fetch.js";
@@ -31,9 +31,17 @@ export interface JsWorkerDeps {
 
 interface ServiceContext {
   assetId: number;
-  scopeId: number | null;
+  scopeId: number;
   depth: number;
   rootDomain: string;
+}
+
+interface JsFileState {
+  id: number;
+  url: string;
+  sha256: string | null;
+  fetchedAt: Date | null;
+  endpointAnalyzedAt: Date | null;
 }
 
 async function loadServiceContext(db: Db, serviceId: number): Promise<ServiceContext | null> {
@@ -47,52 +55,129 @@ async function loadServiceContext(db: Db, serviceId: number): Promise<ServiceCon
     .select({ id: assets.id, domain: assets.domain, scopeId: assets.scopeId, depth: assets.depth })
     .from(assets)
     .where(eq(assets.id, svc.assetId));
-  if (!asset) return null;
+  if (!asset || asset.scopeId == null) return null;
 
-  let rootDomain = asset.domain;
-  if (asset.scopeId) {
-    const [scope] = await db
-      .select({ asset: scopes.asset })
-      .from(scopes)
-      .where(eq(scopes.id, asset.scopeId));
-    if (scope) rootDomain = scope.asset.replace(/^\*\./, "").toLowerCase();
-  }
+  const [scope] = await db
+    .select({ asset: scopes.asset, inScope: scopes.inScope })
+    .from(scopes)
+    .where(eq(scopes.id, asset.scopeId));
+  const rootDomain = scope?.inScope ? normalizeAssetDomain(scope.asset) : null;
+  if (!rootDomain) return null;
 
   return { assetId: asset.id, scopeId: asset.scopeId, depth: asset.depth ?? 0, rootDomain };
 }
 
-export async function processCollectJs(job: { data: CollectJsJob }, deps: JsWorkerDeps): Promise<void> {
+async function getOrCreateJsFile(
+  db: Db,
+  serviceId: number,
+  url: string
+): Promise<JsFileState | null> {
+  const [inserted] = await db
+    .insert(javascriptFiles)
+    .values({ serviceId, url })
+    .onConflictDoNothing()
+    .returning({
+      id: javascriptFiles.id,
+      url: javascriptFiles.url,
+      sha256: javascriptFiles.sha256,
+      fetchedAt: javascriptFiles.fetchedAt,
+      endpointAnalyzedAt: javascriptFiles.endpointAnalyzedAt,
+    });
+
+  if (inserted) return inserted;
+
+  // A previous attempt may have inserted the URL and then failed before the
+  // body/blob update. Those rows used to be skipped forever.
+  const [existing] = await db
+    .select({
+      id: javascriptFiles.id,
+      url: javascriptFiles.url,
+      sha256: javascriptFiles.sha256,
+      fetchedAt: javascriptFiles.fetchedAt,
+      endpointAnalyzedAt: javascriptFiles.endpointAnalyzedAt,
+    })
+    .from(javascriptFiles)
+    .where(and(eq(javascriptFiles.serviceId, serviceId), eq(javascriptFiles.url, url)))
+    .limit(1);
+
+  return existing ?? null;
+}
+
+export function isJavascriptFetchComplete(
+  jsFile: Pick<JsFileState, "fetchedAt" | "sha256">,
+  storeJsBlobs: boolean
+): boolean {
+  if (!jsFile.fetchedAt) return false;
+  return !storeJsBlobs || jsFile.sha256 != null;
+}
+
+export function getEndpointAnalysisJobId(jsId: number, now = new Date()): string {
+  const dayBucket = now.toISOString().slice(0, 10).replaceAll("-", "");
+  return `analyze-js-${jsId}-${dayBucket}`;
+}
+
+export async function processCollectJs(
+  job: { data: CollectJsJob },
+  deps: JsWorkerDeps
+): Promise<void> {
   const { url, serviceId } = job.data;
   const { db } = deps;
+  const analysisJobDate = new Date();
 
   console.log(JSON.stringify({ level: "info", msg: `Collecting JS from ${url}` }));
 
   const ctx = await loadServiceContext(db, serviceId);
   const jsUrls = await runGetJS(url);
+  const readyForEndpointAnalysis = new Map<number, string>();
+  const failedJsUrls: string[] = [];
 
-  for (const jsUrl of jsUrls) {
+  for (const jsUrl of new Set(jsUrls)) {
     try {
-      const [jsFile] = await db
-        .insert(javascriptFiles)
-        .values({ serviceId, url: jsUrl })
-        .onConflictDoNothing()
-        .returning();
+      const jsFile = await getOrCreateJsFile(db, serviceId, jsUrl);
+      if (!jsFile) continue;
+      if (isJavascriptFetchComplete(jsFile, deps.storeJsBlobs)) {
+        // Persistence and endpoint analysis are independent checkpoints. This
+        // recovers rows whose fetch succeeded before a Redis/worker failure.
+        if (!jsFile.endpointAnalyzedAt) {
+          readyForEndpointAnalysis.set(jsFile.id, jsFile.url);
+        }
+        continue;
+      }
 
-      if (!jsFile) continue; // already collected elsewhere
-
-      // Endpoint extraction (linkfinder) happens in the endpoint-worker.
-      await deps.analyzeJsQueue.add(
-        "analyze_js",
-        { jsUrl: jsFile.url, jsId: jsFile.id },
-        DEFAULT_JOB_OPTIONS
-      );
-
-      await analyzeBody(deps, ctx, jsFile.id, jsUrl);
+      const persisted = await analyzeBody(deps, ctx, jsFile.id, jsUrl);
+      if (persisted) readyForEndpointAnalysis.set(jsFile.id, jsFile.url);
+      else failedJsUrls.push(jsUrl);
     } catch (err) {
+      failedJsUrls.push(jsUrl);
       console.error(
         JSON.stringify({ level: "warn", msg: `Failed to process JS ${jsUrl}`, error: String(err) })
       );
     }
+  }
+
+  if (readyForEndpointAnalysis.size > 0) {
+    await deps.analyzeJsQueue.addBulk(
+      [...readyForEndpointAnalysis].map(([jsId, jsUrl]) => ({
+        name: "analyze_js",
+        data: { jsUrl, jsId },
+        opts: {
+          ...DEFAULT_JOB_OPTIONS,
+          // Failed Bull jobs are retained for days. A daily bucket lets a
+          // still-unprocessed DB row heal on a later collection pass.
+          jobId: getEndpointAnalysisJobId(jsId, analysisJobDate),
+        },
+      }))
+    );
+  }
+
+  // Complete bodies are skipped cheaply on the next BullMQ attempt, while
+  // incomplete rows are selected again and retried. Throw only after the
+  // successful subset has been enqueued so partial progress is durable.
+  if (failedJsUrls.length > 0) {
+    const examples = failedJsUrls.slice(0, 3).join(", ");
+    throw new Error(
+      `Failed to persist ${failedJsUrls.length}/${new Set(jsUrls).size} JavaScript file(s); examples: ${examples}`
+    );
   }
 }
 
@@ -102,24 +187,23 @@ async function analyzeBody(
   ctx: ServiceContext | null,
   jsId: number,
   jsUrl: string
-): Promise<void> {
+): Promise<boolean> {
   const { db } = deps;
   const fetched = await fetchJs(jsUrl, deps.jsMaxBytes);
-  if (!fetched) return;
+  if (!fetched) return false;
 
   const body = fetched.body;
   const text = body.toString("utf-8");
 
   let sha256: string | undefined;
-  if (deps.storeJsBlobs && deps.store) {
-    try {
-      sha256 = await storeBlob(db, deps.store, body);
-    } catch (err) {
-      console.error(JSON.stringify({ level: "warn", msg: `Blob store failed for ${jsUrl}`, error: String(err) }));
-    }
+  if (deps.storeJsBlobs) {
+    if (!deps.store) throw new Error("JS blob storage is enabled but unavailable");
+    // Do not mark the row fetched, or enqueue endpoint analysis, until object
+    // storage and the js_blobs index have both accepted the body.
+    sha256 = await storeBlob(db, deps.store, body);
   }
 
-  await db
+  const [persisted] = await db
     .update(javascriptFiles)
     .set({
       sha256: sha256 ?? null,
@@ -128,13 +212,23 @@ async function analyzeBody(
       hasSourcemap: fetched.hasSourcemap,
       fetchedAt: new Date(),
     })
-    .where(eq(javascriptFiles.id, jsId));
+    .where(eq(javascriptFiles.id, jsId))
+    .returning({ id: javascriptFiles.id });
+
+  if (!persisted) throw new Error(`JavaScript row ${jsId} disappeared before persistence`);
 
   // Library fingerprinting: retire.js (with CVEs) + inline banners.
   // Skipped entirely in light mode (retire.js is the CPU-heaviest step).
-  const libs = deps.detectJsLibraries
-    ? dedupeLibraries([...(await runRetire(body)), ...extractInlineLibraries(text)])
-    : [];
+  let libs: DetectedLibrary[] = [];
+  if (deps.detectJsLibraries) {
+    try {
+      libs = dedupeLibraries([...(await runRetire(body)), ...extractInlineLibraries(text)]);
+    } catch (err) {
+      console.error(
+        JSON.stringify({ level: "warn", msg: `Library detection failed for ${jsUrl}`, error: String(err) })
+      );
+    }
+  }
   for (const lib of libs) {
     try {
       await db
@@ -155,8 +249,16 @@ async function analyzeBody(
 
   // Subdomain mining + bounded recursion.
   if (ctx) {
-    await mineSubdomains(deps, ctx, text);
+    try {
+      await mineSubdomains(deps, ctx, text);
+    } catch (err) {
+      console.error(
+        JSON.stringify({ level: "warn", msg: `Subdomain mining failed for ${jsUrl}`, error: String(err) })
+      );
+    }
   }
+
+  return true;
 }
 
 function dedupeLibraries(libs: DetectedLibrary[]): DetectedLibrary[] {

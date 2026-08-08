@@ -1,6 +1,7 @@
 export * from "./queues.js";
 export * from "./jobs.js";
 export * from "./connection.js";
+export * from "./shutdown.js";
 
 import type { JobsOptions, WorkerOptions } from "bullmq";
 

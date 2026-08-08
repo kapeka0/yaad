@@ -1,5 +1,4 @@
-import { spawn } from "child_process";
-import { createInterface } from "readline";
+import { getToolTimeoutMs, runProcess } from "@yaad/subprocess";
 
 export interface HttpxResult {
   url: string;
@@ -39,35 +38,30 @@ interface HttpxLine {
 }
 
 export async function runHttpx(domain: string): Promise<HttpxResult[]> {
-  return new Promise((resolve, reject) => {
-    const results: HttpxResult[] = [];
+  const results: HttpxResult[] = [];
 
-    const proc = spawn(
-      "httpx",
-      [
-        "-u", domain,
-        "-json",
-        "-silent",
-        "-status-code",
-        "-title",
-        "-follow-redirects",
-        "-tech-detect",
-        "-web-server",
-        "-content-type",
-        "-content-length",
-        "-favicon",
-        "-jarm",
-        "-cname",
-        "-ip",
-        "-cdn",
-        "-include-response-header",
-      ],
-      { stdio: ["ignore", "pipe", "ignore"] }
-    );
-
-    const rl = createInterface({ input: proc.stdout });
-
-    rl.on("line", (line) => {
+  await runProcess({
+    command: "httpx",
+    args: [
+      "-u", domain,
+      "-json",
+      "-silent",
+      "-status-code",
+      "-title",
+      "-follow-redirects",
+      "-tech-detect",
+      "-web-server",
+      "-content-type",
+      "-content-length",
+      "-favicon",
+      "-jarm",
+      "-cname",
+      "-ip",
+      "-cdn",
+      "-include-response-header",
+    ],
+    timeoutMs: getToolTimeoutMs("HTTPX_TIMEOUT_MS", 120_000),
+    onStdoutLine: (line) => {
       if (!line.trim()) return;
       try {
         const p = JSON.parse(line) as HttpxLine;
@@ -91,9 +85,8 @@ export async function runHttpx(domain: string): Promise<HttpxResult[]> {
       } catch {
         // skip malformed lines
       }
-    });
-
-    proc.on("close", () => resolve(results));
-    proc.on("error", (err) => reject(new Error(`httpx error: ${err.message}`)));
+    },
   });
+
+  return results;
 }

@@ -41,6 +41,14 @@ export interface SchedulerSettings {
   enumIntervalHours: number;
   // Re-run http scan (→ js → tech) for a known asset after this many hours.
   rescanIntervalHours: number;
+  // Failed or stuck attempts may be queued again after this interval.
+  retryIntervalHours: number;
+  // Backpressure limits. The scheduler never adds work above these depths.
+  maxEnumQueueDepth: number;
+  maxScanQueueDepth: number;
+  maxCollectQueueDepth: number;
+  maxAnalyzeQueueDepth: number;
+  maxTechQueueDepth: number;
 }
 
 function boolEnv(value: string | undefined, fallback: boolean): boolean {
@@ -84,6 +92,12 @@ export function loadConfig(): AppConfig {
       batchSize: parseInt(process.env.SCHEDULER_BATCH_SIZE ?? "500", 10),
       enumIntervalHours: parseInt(process.env.RESCAN_ENUM_INTERVAL_HOURS ?? "168", 10), // 7 days
       rescanIntervalHours: parseInt(process.env.RESCAN_HTTP_INTERVAL_HOURS ?? "24", 10), // 1 day
+      retryIntervalHours: parseInt(process.env.SCHEDULER_RETRY_INTERVAL_HOURS ?? "6", 10),
+      maxEnumQueueDepth: parseInt(process.env.SCHEDULER_MAX_ENUM_QUEUE ?? "10000", 10),
+      maxScanQueueDepth: parseInt(process.env.SCHEDULER_MAX_SCAN_QUEUE ?? "10000", 10),
+      maxCollectQueueDepth: parseInt(process.env.SCHEDULER_MAX_COLLECT_QUEUE ?? "5000", 10),
+      maxAnalyzeQueueDepth: parseInt(process.env.SCHEDULER_MAX_ANALYZE_QUEUE ?? "20000", 10),
+      maxTechQueueDepth: parseInt(process.env.SCHEDULER_MAX_TECH_QUEUE ?? "5000", 10),
     },
   };
 }

@@ -12,6 +12,7 @@
     "@yaad/config": "workspace:*",
     "@yaad/db": "workspace:*",
     "@yaad/queue": "workspace:*",
+    "@yaad/subprocess": "workspace:*",
     "bullmq": "^5.7.8",
     "drizzle-orm": "^0.30.10"
   },

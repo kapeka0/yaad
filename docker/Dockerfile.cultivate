@@ -49,12 +49,13 @@ WORKDIR /app
 ARG CULTIVATE_COMMIT=42754ee2490d4425b117a6ea2e251460496974cc
 
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_LAUNCH_ARGS="--no-sandbox --disable-dev-shm-usage --disable-gpu"
 
 # Detect Chromium path (handles both chromium and chromium-browser on ARM)
 RUN which chromium || which chromium-browser || echo "chromium not found"
 RUN ln -sf $(which chromium-browser 2>/dev/null || which chromium) /usr/bin/chromium 2>/dev/null || true
 ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+ENV CHROMIUM_BIN=/usr/bin/chromium
+ENV PUPPETEER_MAX_TIMEOUT=45000
 
 RUN git clone https://github.com/kapeka0/cultivate-api.git . && \
     git checkout --detach "$CULTIVATE_COMMIT"
@@ -65,17 +66,16 @@ COPY docker/cultivate-api-cleanup.patch /tmp/cultivate-api-cleanup.patch
 RUN git apply /tmp/cultivate-api-cleanup.patch && \
     rm /tmp/cultivate-api-cleanup.patch
 
-RUN npm install
+RUN npm install --omit=dev
 
-RUN find . -name "*.js" -not -path "*/node_modules/*" | \
-      xargs grep -l "puppeteer\.launch\|browser\.launch" 2>/dev/null | \
-      xargs sed -i "s/puppeteer\.launch({/puppeteer.launch({ args: ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu'],/g" 2>/dev/null || true && \
-    find . -name "*.js" -not -path "*/node_modules/*" | \
-      xargs grep -l "puppeteer\.launch\|browser\.launch" 2>/dev/null | \
-      xargs sed -i "s/puppeteer\.launch()/puppeteer.launch({ args: ['--no-sandbox','--disable-dev-shm-usage','--disable-gpu'] })/g" 2>/dev/null || true
-
+ENV NODE_ENV=production
 ENV PORT=3000
 
 EXPOSE 3000
 
-CMD ["npm", "start"]
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=2 \
+  CMD wget -qO- http://localhost:3000/health >/dev/null || exit 1
+
+STOPSIGNAL SIGTERM
+
+CMD ["node", "api.js"]

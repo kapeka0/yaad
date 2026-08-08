@@ -17,6 +17,9 @@ export async function processScanHttp(
   console.log(JSON.stringify({ level: "info", msg: `Scanning HTTP for ${domain}` }));
 
   const results = await runHttpx(domain);
+  const downstream: Array<{ serviceId: number; url: string }> = [];
+  const failures: Array<{ url: string; error: string }> = [];
+  let resolvedIp: string | undefined;
 
   for (const result of results) {
     try {
@@ -42,13 +45,7 @@ export async function processScanHttp(
         .onConflictDoUpdate({ target: webServices.url, set: enrichment })
         .returning();
 
-      // Keep the asset's resolved IP fresh.
-      if (result.ip) {
-        await db
-          .update(assets)
-          .set({ ip: result.ip, resolved: true, lastSeen: new Date() })
-          .where(eq(assets.id, assetId));
-      }
+      if (result.ip) resolvedIp = result.ip;
 
       if (service) {
         // Persist httpx-detected technologies directly (fast, no extra fetch).
@@ -56,23 +53,50 @@ export async function processScanHttp(
           await upsertTech(db, assetId, techName);
         }
 
-        await collectJsQueue.add(
-          "collect_js",
-          { url: result.url, serviceId: service.id },
-          DEFAULT_JOB_OPTIONS
-        );
-        await detectTechQueue.add(
-          "detect_technology",
-          { url: result.url, assetId },
-          DEFAULT_JOB_OPTIONS
-        );
+        downstream.push({ serviceId: service.id, url: result.url });
       }
     } catch (err) {
+      failures.push({ url: result.url, error: String(err) });
       console.error(
         JSON.stringify({ level: "warn", msg: `Failed to upsert service ${result.url}`, error: String(err) })
       );
     }
   }
+
+  if (failures.length > 0) {
+    throw new Error(`Failed to persist ${failures.length}/${results.length} HTTP result(s)`);
+  }
+
+  if (downstream.length > 0) {
+    const dayBucket = Math.floor(Date.now() / 86_400_000);
+    await Promise.all([
+      collectJsQueue.addBulk(
+        downstream.map(({ serviceId, url }) => ({
+          name: "collect_js",
+          data: { url, serviceId },
+          opts: { ...DEFAULT_JOB_OPTIONS, jobId: `collect-js-${serviceId}-${dayBucket}` },
+        }))
+      ),
+      detectTechQueue.addBulk(
+        downstream.map(({ serviceId, url }) => ({
+          name: "detect_technology",
+          data: { url, assetId },
+          opts: { ...DEFAULT_JOB_OPTIONS, jobId: `detect-tech-${serviceId}-${dayBucket}` },
+        }))
+      ),
+    ]);
+  }
+
+  // Freshness means the scan and its downstream enqueue completed, not merely
+  // that the scheduler attempted to queue it.
+  await db
+    .update(assets)
+    .set({
+      ...(resolvedIp ? { ip: resolvedIp, resolved: true } : {}),
+      lastSeen: new Date(),
+      lastScannedAt: new Date(),
+    })
+    .where(eq(assets.id, assetId));
 }
 
 async function upsertTech(db: Db, assetId: number, name: string): Promise<void> {

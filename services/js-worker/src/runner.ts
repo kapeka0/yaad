@@ -1,24 +1,19 @@
-import { spawn } from "child_process";
-import { createInterface } from "readline";
+import { getToolTimeoutMs, runProcess } from "@yaad/subprocess";
 
 export async function runGetJS(url: string): Promise<string[]> {
-  return new Promise((resolve, reject) => {
-    const jsUrls: string[] = [];
+  const jsUrls: string[] = [];
 
-    const proc = spawn("getJS", ["--url", url, "--complete"], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    const rl = createInterface({ input: proc.stdout });
-
-    rl.on("line", (line) => {
+  await runProcess({
+    command: "getJS",
+    args: ["--url", url, "--complete"],
+    timeoutMs: getToolTimeoutMs("GETJS_TIMEOUT_MS", 120_000),
+    onStdoutLine: (line) => {
       const trimmed = line.trim();
       if (trimmed && (trimmed.startsWith("http://") || trimmed.startsWith("https://"))) {
         jsUrls.push(trimmed);
       }
-    });
-
-    proc.on("close", () => resolve(jsUrls));
-    proc.on("error", (err) => reject(new Error(`getJS error: ${err.message}`)));
+    },
   });
+
+  return jsUrls;
 }

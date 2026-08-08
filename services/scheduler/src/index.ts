@@ -1,8 +1,14 @@
 import { Queue } from "bullmq";
 import { loadConfig } from "@yaad/config";
 import { getDb } from "@yaad/db";
-import { getRedisOptions, QUEUES } from "@yaad/queue";
-import type { EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
+import { getRedisOptions, installGracefulShutdown, QUEUES } from "@yaad/queue";
+import type {
+  AnalyzeJsJob,
+  CollectJsJob,
+  DetectTechnologyJob,
+  EnumerateSubdomainsJob,
+  ScanHttpJob,
+} from "@yaad/queue";
 import { runTick } from "./refresher.js";
 
 function log(level: string, msg: string, extra: Record<string, unknown> = {}): void {
@@ -19,12 +25,28 @@ async function main(): Promise<void> {
     connection: redisOptions,
   });
   const scanQueue = new Queue<ScanHttpJob>(QUEUES.SCAN_HTTP, { connection: redisOptions });
+  const collectJsQueue = new Queue<CollectJsJob>(QUEUES.COLLECT_JS, { connection: redisOptions });
+  const analyzeJsQueue = new Queue<AnalyzeJsJob>(QUEUES.ANALYZE_JS, { connection: redisOptions });
+  const detectTechQueue = new Queue<DetectTechnologyJob>(QUEUES.DETECT_TECHNOLOGY, {
+    connection: redisOptions,
+  });
+  const downstreamQueues = [
+    { queue: collectJsQueue, maxDepth: scheduler.maxCollectQueueDepth },
+    { queue: analyzeJsQueue, maxDepth: scheduler.maxAnalyzeQueueDepth },
+    { queue: detectTechQueue, maxDepth: scheduler.maxTechQueueDepth },
+  ];
 
   log("info", "Scheduler started", {
     tickMs: scheduler.tickMs,
     batchSize: scheduler.batchSize,
     enumIntervalHours: scheduler.enumIntervalHours,
     rescanIntervalHours: scheduler.rescanIntervalHours,
+    retryIntervalHours: scheduler.retryIntervalHours,
+    maxEnumQueueDepth: scheduler.maxEnumQueueDepth,
+    maxScanQueueDepth: scheduler.maxScanQueueDepth,
+    maxCollectQueueDepth: scheduler.maxCollectQueueDepth,
+    maxAnalyzeQueueDepth: scheduler.maxAnalyzeQueueDepth,
+    maxTechQueueDepth: scheduler.maxTechQueueDepth,
   });
 
   let running = false;
@@ -36,7 +58,7 @@ async function main(): Promise<void> {
     }
     running = true;
     try {
-      await runTick(db, enumerateQueue, scanQueue, scheduler);
+      await runTick(db, enumerateQueue, scanQueue, scheduler, downstreamQueues);
     } catch (err) {
       log("error", "Scheduler tick failed", { error: String(err) });
     } finally {
@@ -46,7 +68,15 @@ async function main(): Promise<void> {
 
   // Run once at startup, then on the configured interval.
   await tick();
-  setInterval(() => void tick(), scheduler.tickMs);
+  const interval = setInterval(() => void tick(), scheduler.tickMs);
+  installGracefulShutdown("scheduler", [
+    { close: async () => clearInterval(interval) },
+    enumerateQueue,
+    scanQueue,
+    collectJsQueue,
+    analyzeJsQueue,
+    detectTechQueue,
+  ]);
 }
 
 main().catch((err) => {

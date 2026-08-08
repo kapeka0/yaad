@@ -1,8 +1,8 @@
-import { spawn } from "child_process";
 import { tmpdir } from "os";
 import { join } from "path";
 import { mkdtemp, writeFile, rm, readFile } from "fs/promises";
 import { randomUUID } from "crypto";
+import { getToolTimeoutMs, runProcess } from "@yaad/subprocess";
 
 export interface DetectedLibrary {
   name: string;
@@ -42,15 +42,12 @@ export async function runRetire(body: Buffer): Promise<DetectedLibrary[]> {
   try {
     await writeFile(jsFile, body);
 
-    await new Promise<void>((resolve) => {
-      const proc = spawn(
-        "retire",
-        ["--path", dir, "--outputformat", "json", "--outputpath", outFile],
-        { stdio: ["ignore", "ignore", "ignore"] }
-      );
+    await runProcess({
+      command: "retire",
+      args: ["--path", dir, "--outputformat", "json", "--outputpath", outFile],
+      timeoutMs: getToolTimeoutMs("RETIRE_TIMEOUT_MS", 300_000),
+      allowedExitCodes: [0, 13],
       // retire exits non-zero when it finds vulnerabilities — that's expected.
-      proc.on("close", () => resolve());
-      proc.on("error", () => resolve());
     });
 
     const raw = await readFile(outFile, "utf-8").catch(() => "");
@@ -88,8 +85,6 @@ export async function runRetire(body: Buffer): Promise<DetectedLibrary[]> {
     }
 
     return [...libs.values()];
-  } catch {
-    return [];
   } finally {
     await rm(dir, { recursive: true, force: true }).catch(() => {});
   }

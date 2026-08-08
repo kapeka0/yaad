@@ -1,9 +1,8 @@
-import { spawn } from "child_process";
 import { tmpdir } from "os";
 import { join } from "path";
 import { readFile, unlink, writeFile } from "fs/promises";
 import { randomUUID } from "crypto";
-import { createInterface } from "readline";
+import { getToolTimeoutMs, runProcess } from "@yaad/subprocess";
 
 function isHostname(value: string): boolean {
   return /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$/i.test(
@@ -20,70 +19,62 @@ export async function runSubfinder(domain: string, deep = true): Promise<string[
   const args = ["-d", domain, "-o", outputFile, "-silent"];
   if (deep) args.push("-all", "-recursive");
 
-  return new Promise((resolve) => {
-    const proc = spawn("subfinder", args, { stdio: ["ignore", "pipe", "pipe"] });
-
-    proc.on("close", async () => {
-      try {
-        const content = await readFile(outputFile, "utf-8");
-        await unlink(outputFile).catch(() => {});
-        resolve(
-          content
-            .split("\n")
-            .map((s) => s.trim().toLowerCase())
-            .filter(Boolean)
-        );
-      } catch {
-        resolve([]);
-      }
+  try {
+    await runProcess({
+      command: "subfinder",
+      args,
+      timeoutMs: getToolTimeoutMs("SUBFINDER_TIMEOUT_MS", 900_000),
     });
 
-    proc.on("error", () => resolve([]));
-  });
+    const content = await readFile(outputFile, "utf-8").catch(() => "");
+    return content
+      .split("\n")
+      .map((s) => s.trim().toLowerCase())
+      .filter(Boolean);
+  } finally {
+    await unlink(outputFile).catch(() => {});
+  }
 }
 
 /** Certificate transparency logs via crt.sh (free, no API key). */
 export async function getCrtSh(domain: string): Promise<string[]> {
-  try {
-    const res = await fetch(
-      `https://crt.sh/?q=${encodeURIComponent("%." + domain)}&output=json`,
-      { signal: AbortSignal.timeout(30_000) }
-    );
-    if (!res.ok) return [];
-    const rows = (await res.json()) as Array<{ name_value?: string }>;
-    const out = new Set<string>();
-    for (const row of rows) {
-      if (!row.name_value) continue;
-      for (const raw of row.name_value.split("\n")) {
-        const name = raw.trim().toLowerCase().replace(/^\*\./, "");
-        if (name.endsWith(domain) && isHostname(name)) out.add(name);
-      }
-    }
-    return [...out];
-  } catch {
-    return [];
+  const res = await fetch(
+    `https://crt.sh/?q=${encodeURIComponent("%." + domain)}&output=json`,
+    { signal: AbortSignal.timeout(getToolTimeoutMs("CRTSH_TIMEOUT_MS", 30_000)) }
+  );
+  if (!res.ok) {
+    throw new Error(`crt.sh request failed for ${domain}: ${res.status} ${res.statusText}`);
   }
+
+  const rows = (await res.json()) as Array<{ name_value?: string }>;
+  const out = new Set<string>();
+  for (const row of rows) {
+    if (!row.name_value) continue;
+    for (const raw of row.name_value.split("\n")) {
+      const name = raw.trim().toLowerCase().replace(/^\*\./, "");
+      if (name.endsWith(domain) && isHostname(name)) out.add(name);
+    }
+  }
+  return [...out];
 }
 
 /** Historical URLs via gau; we keep only in-scope hostnames. */
 export async function runGau(domain: string): Promise<string[]> {
-  return new Promise((resolve) => {
-    const hosts = new Set<string>();
-    const proc = spawn("gau", ["--subs", "--threads", "5", domain], {
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    const rl = createInterface({ input: proc.stdout });
-    rl.on("line", (line) => {
+  const hosts = new Set<string>();
+  await runProcess({
+    command: "gau",
+    args: ["--subs", "--threads", "5", domain],
+    timeoutMs: getToolTimeoutMs("GAU_TIMEOUT_MS", 600_000),
+    onStdoutLine: (line) => {
       try {
         const host = new URL(line.trim()).hostname.toLowerCase();
         if (host.endsWith(domain) && isHostname(host)) hosts.add(host);
       } catch {
         /* not a URL */
       }
-    });
-    proc.on("close", () => resolve([...hosts]));
-    proc.on("error", () => resolve([]));
+    },
   });
+  return [...hosts];
 }
 
 export interface Resolution {
@@ -98,34 +89,28 @@ export interface Resolution {
 export async function resolveHosts(hosts: string[]): Promise<Resolution[]> {
   if (hosts.length === 0) return [];
   const inputFile = join(tmpdir(), `dnsx-${randomUUID()}.txt`);
-  await writeFile(inputFile, hosts.join("\n"), "utf-8");
+  const results: Resolution[] = [];
 
-  return new Promise((resolve) => {
-    const results: Resolution[] = [];
-    const proc = spawn(
-      "dnsx",
-      ["-l", inputFile, "-a", "-resp", "-json", "-silent"],
-      { stdio: ["ignore", "pipe", "ignore"] }
-    );
-    const rl = createInterface({ input: proc.stdout });
-    rl.on("line", (line) => {
-      if (!line.trim()) return;
-      try {
-        const parsed = JSON.parse(line) as { host?: string; a?: string[] };
-        if (parsed.host) {
-          results.push({ host: parsed.host.toLowerCase(), ip: parsed.a?.[0] ?? null });
+  try {
+    await writeFile(inputFile, hosts.join("\n"), "utf-8");
+    await runProcess({
+      command: "dnsx",
+      args: ["-l", inputFile, "-a", "-resp", "-json", "-silent"],
+      timeoutMs: getToolTimeoutMs("DNSX_TIMEOUT_MS", 600_000),
+      onStdoutLine: (line) => {
+        if (!line.trim()) return;
+        try {
+          const parsed = JSON.parse(line) as { host?: string; a?: string[] };
+          if (parsed.host) {
+            results.push({ host: parsed.host.toLowerCase(), ip: parsed.a?.[0] ?? null });
+          }
+        } catch {
+          /* skip malformed lines */
         }
-      } catch {
-        /* skip */
-      }
+      },
     });
-    proc.on("close", async () => {
-      await unlink(inputFile).catch(() => {});
-      resolve(results);
-    });
-    proc.on("error", async () => {
-      await unlink(inputFile).catch(() => {});
-      resolve([]);
-    });
-  });
+    return results;
+  } finally {
+    await unlink(inputFile).catch(() => {});
+  }
 }

@@ -1,7 +1,12 @@
 import { Worker, Queue } from "bullmq";
 import { loadConfig } from "@yaad/config";
 import { getDb } from "@yaad/db";
-import { DEFAULT_WORKER_OPTIONS, getRedisOptions, QUEUES } from "@yaad/queue";
+import {
+  DEFAULT_WORKER_OPTIONS,
+  getRedisOptions,
+  installGracefulShutdown,
+  QUEUES,
+} from "@yaad/queue";
 import type { EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
 import { processEnumerateSubdomains } from "./processor.js";
 
@@ -20,6 +25,7 @@ async function main(): Promise<void> {
         crtShEnabled: config.crtShEnabled,
         gauEnabled: config.gauEnabled,
         subfinderDeep: config.subfinderDeep,
+        maxScanQueueDepth: config.scheduler.maxScanQueueDepth,
       });
     },
     {
@@ -36,6 +42,8 @@ async function main(): Promise<void> {
   worker.on("failed", (job, err) => {
     console.error(JSON.stringify({ level: "error", msg: `Job ${job?.id} failed`, error: String(err) }));
   });
+
+  installGracefulShutdown("subdomain-worker", [worker, scanQueue]);
 
   console.log(JSON.stringify({ level: "info", msg: "Subdomain worker started" }));
 }

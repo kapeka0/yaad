@@ -57,6 +57,13 @@
       "when": 1786019563140,
       "tag": "0007_relink_asset_scopes",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1786171200000,
+      "tag": "0008_reliable_scheduler",
+      "breakpoints": true
     }
   ]
 }

@@ -10,6 +10,7 @@ import {
   primaryKey,
   jsonb,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 export const programs = pgTable("programs", {
   id: serial("id").primaryKey(),
@@ -32,12 +33,17 @@ export const scopes = pgTable(
     wildcard: boolean("wildcard").notNull().default(false),
     inScope: boolean("in_scope").notNull().default(true),
     createdAt: timestamp("created_at").defaultNow().notNull(),
-    // Last time the scheduler (re-)ran subdomain enumeration for this scope.
-    // NULL means never enumerated → picked up on the next scheduler tick.
+    // Last successful enumeration, updated by the worker after completion.
     lastEnumeratedAt: timestamp("last_enumerated_at"),
+    // Last time the scheduler queued an enumeration attempt. Keeping attempts
+    // separate prevents a failed or stuck job from looking fresh forever.
+    lastEnumerationAttemptAt: timestamp("last_enumeration_attempt_at"),
   },
   (t) => ({
     uniqProgramAsset: uniqueIndex("scopes_program_asset_idx").on(t.programId, t.asset),
+    schedulerReadyIdx: index("scopes_scheduler_ready_idx")
+      .on(t.lastEnumeratedAt, t.lastEnumerationAttemptAt)
+      .where(sql`${t.wildcard} = true and ${t.inScope} = true`),
   })
 );
 
@@ -56,53 +62,75 @@ export const assets = pgTable(
     depth: integer("depth").notNull().default(0),
     firstSeen: timestamp("first_seen").defaultNow().notNull(),
     lastSeen: timestamp("last_seen").defaultNow().notNull(),
-    // Last time the scheduler (re-)enqueued an http scan for this asset.
-    // NULL means never scanned by the scheduler → picked up on the next tick.
+    // Last successful HTTP scan, updated by httpx-worker after completion.
     lastScannedAt: timestamp("last_scanned_at"),
+    // Last time the scheduler queued an HTTP scan attempt.
+    lastScanAttemptAt: timestamp("last_scan_attempt_at"),
   },
   (t) => ({
     // Scheduler scans oldest-first; index makes the staleness query cheap.
     lastScannedAtIdx: index("assets_last_scanned_at_idx").on(t.lastScannedAt),
+    lastScanAttemptAtIdx: index("assets_last_scan_attempt_at_idx").on(t.lastScanAttemptAt),
+    schedulerReadyIdx: index("assets_scheduler_ready_idx")
+      .on(t.lastScannedAt, t.lastScanAttemptAt)
+      .where(sql`${t.scopeId} is not null and ${t.resolved} = true`),
   })
 );
 
-export const webServices = pgTable("web_services", {
-  id: serial("id").primaryKey(),
-  assetId: integer("asset_id")
-    .notNull()
-    .references(() => assets.id),
-  url: text("url").notNull().unique(),
-  statusCode: integer("status_code"),
-  title: text("title"),
-  // Enrichment from httpx
-  webServer: text("web_server"),
-  contentType: text("content_type"),
-  contentLength: integer("content_length"),
-  ip: text("ip"),
-  cname: text("cname"),
-  cdnName: text("cdn_name"),
-  faviconHash: text("favicon_hash"),
-  jarm: text("jarm"),
-  // httpx -tech-detect output, stored raw for cross-referencing
-  techFingerprint: jsonb("tech_fingerprint").$type<string[]>(),
-  // Full response headers as returned by httpx
-  responseHeaders: jsonb("response_headers").$type<Record<string, string>>(),
-  lastScanned: timestamp("last_scanned").defaultNow().notNull(),
-});
+export const webServices = pgTable(
+  "web_services",
+  {
+    id: serial("id").primaryKey(),
+    assetId: integer("asset_id")
+      .notNull()
+      .references(() => assets.id),
+    url: text("url").notNull().unique(),
+    statusCode: integer("status_code"),
+    title: text("title"),
+    // Enrichment from httpx
+    webServer: text("web_server"),
+    contentType: text("content_type"),
+    contentLength: integer("content_length"),
+    ip: text("ip"),
+    cname: text("cname"),
+    cdnName: text("cdn_name"),
+    faviconHash: text("favicon_hash"),
+    jarm: text("jarm"),
+    // httpx -tech-detect output, stored raw for cross-referencing
+    techFingerprint: jsonb("tech_fingerprint").$type<string[]>(),
+    // Full response headers as returned by httpx
+    responseHeaders: jsonb("response_headers").$type<Record<string, string>>(),
+    lastScanned: timestamp("last_scanned").defaultNow().notNull(),
+  },
+  (t) => ({
+    assetIdIdx: index("web_services_asset_id_idx").on(t.assetId),
+  })
+);
 
-export const javascriptFiles = pgTable("javascript_files", {
-  id: serial("id").primaryKey(),
-  serviceId: integer("service_id")
-    .notNull()
-    .references(() => webServices.id),
-  url: text("url").notNull().unique(),
-  // sha256 of the fetched body; links to js_blobs (content-addressable storage)
-  sha256: text("sha256"),
-  sizeBytes: integer("size_bytes"),
-  httpStatus: integer("http_status"),
-  hasSourcemap: boolean("has_sourcemap").notNull().default(false),
-  fetchedAt: timestamp("fetched_at"),
-});
+export const javascriptFiles = pgTable(
+  "javascript_files",
+  {
+    id: serial("id").primaryKey(),
+    serviceId: integer("service_id")
+      .notNull()
+      .references(() => webServices.id),
+    // The same CDN URL can legitimately occur on many services. Uniqueness is
+    // per service occurrence, while body storage remains deduplicated by SHA.
+    url: text("url").notNull(),
+    // sha256 of the fetched body; links to js_blobs (content-addressable storage)
+    sha256: text("sha256"),
+    sizeBytes: integer("size_bytes"),
+    httpStatus: integer("http_status"),
+    hasSourcemap: boolean("has_sourcemap").notNull().default(false),
+    fetchedAt: timestamp("fetched_at"),
+    // Set by endpoint-worker only after LinkFinder output was persisted and
+    // scoped fan-out completed. NULL rows can be safely recovered later.
+    endpointAnalyzedAt: timestamp("endpoint_analyzed_at"),
+  },
+  (t) => ({
+    uniqServiceUrl: uniqueIndex("javascript_files_service_url_idx").on(t.serviceId, t.url),
+  })
+);
 
 // Content-addressable storage index. One row per unique JS body (dedup by sha256).
 // The actual bytes live in object storage (MinIO) under `storageKey`, zstd/gzip compressed.
@@ -185,6 +213,10 @@ export const assetTechnologies = pgTable(
   },
   (t) => ({
     pk: primaryKey({ columns: [t.assetId, t.technologyId] }),
+    technologyAssetIdx: index("asset_technologies_technology_asset_idx").on(
+      t.technologyId,
+      t.assetId
+    ),
   })
 );
 

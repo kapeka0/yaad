@@ -1,7 +1,12 @@
 import { Worker } from "bullmq";
 import { loadConfig } from "@yaad/config";
 import { getDb } from "@yaad/db";
-import { DEFAULT_WORKER_OPTIONS, getRedisOptions, QUEUES } from "@yaad/queue";
+import {
+  DEFAULT_WORKER_OPTIONS,
+  getRedisOptions,
+  installGracefulShutdown,
+  QUEUES,
+} from "@yaad/queue";
 import type { DetectTechnologyJob } from "@yaad/queue";
 import { processDetectTechnology } from "./processor.js";
 
@@ -34,6 +39,8 @@ async function main(): Promise<void> {
   worker.on("failed", (job, err) => {
     console.error(JSON.stringify({ level: "error", msg: `Job ${job?.id} failed`, error: String(err) }));
   });
+
+  installGracefulShutdown("tech-worker", [worker]);
 
   console.log(JSON.stringify({ level: "info", msg: "Tech detection worker started" }));
 }

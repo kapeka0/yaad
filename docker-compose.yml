@@ -1,9 +1,20 @@
 name: yaad
 
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-external-tool-env: &external-tool-env
+  EXTERNAL_TOOL_KILL_GRACE_MS: ${EXTERNAL_TOOL_KILL_GRACE_MS:-5000}
+  EXTERNAL_TOOL_STDERR_MAX_BYTES: ${EXTERNAL_TOOL_STDERR_MAX_BYTES:-65536}
+
 services:
   postgres:
     image: postgres:15-alpine
     restart: unless-stopped
+    logging: *default-logging
     environment:
       POSTGRES_USER: yaad
       POSTGRES_PASSWORD: yaad
@@ -19,6 +30,7 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    logging: *default-logging
     volumes:
       - redis_data:/data
     healthcheck:
@@ -28,8 +40,9 @@ services:
       retries: 10
 
   minio:
-    image: minio/minio:latest
+    image: minio/minio:RELEASE.2025-09-07T16-13-09Z
     restart: unless-stopped
+    logging: *default-logging
     command: server /data --console-address ":9001"
     environment:
       MINIO_ROOT_USER: ${S3_ACCESS_KEY:-yaad}
@@ -39,29 +52,44 @@ services:
     ports:
       - "9000:9000"
       - "9001:9001"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   cultivate-api:
     build:
       context: .
       dockerfile: docker/Dockerfile.cultivate
     restart: unless-stopped
+    logging: *default-logging
     init: true
     pids_limit: 512
     shm_size: '256m'
     environment:
       PORT: 3000
+      CULTIVATE_MAX_CONCURRENCY: 1
+      CULTIVATE_ANALYSIS_TIMEOUT_MS: 50000
+      CULTIVATE_CLEANUP_TIMEOUT_MS: 5000
+      CULTIVATE_PID_RECYCLE_THRESHOLD: 384
+      CULTIVATE_FAILURE_RECYCLE_THRESHOLD: 3
+      CULTIVATE_WATCHDOG_INTERVAL_MS: 10000
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
-      start_period: 30s
+      interval: 15s
+      timeout: 3s
+      retries: 2
+      start_period: 20s
+    stop_grace_period: 10s
 
   api:
     build:
       context: .
       dockerfile: services/api/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
@@ -79,7 +107,7 @@ services:
       redis:
         condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/health || exit 1"]
       interval: 5s
@@ -91,6 +119,8 @@ services:
     build:
       context: .
       dockerfile: services/scope-importer/Dockerfile
+    restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
@@ -105,7 +135,9 @@ services:
       context: .
       dockerfile: services/subdomain-worker/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
+      <<: *external-tool-env
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
       WORKER_CONCURRENCY: ${SUBDOMAIN_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
@@ -114,6 +146,9 @@ services:
       CRTSH_ENABLED: ${CRTSH_ENABLED:-true}
       GAU_ENABLED: ${GAU_ENABLED:-true}
       SUBFINDER_DEEP: ${SUBFINDER_DEEP:-true}
+      SUBFINDER_TIMEOUT_MS: ${SUBFINDER_TIMEOUT_MS:-900000}
+      GAU_TIMEOUT_MS: ${GAU_TIMEOUT_MS:-600000}
+      DNSX_TIMEOUT_MS: ${DNSX_TIMEOUT_MS:-600000}
       MAX_RECURSION_DEPTH: ${MAX_RECURSION_DEPTH:-2}
       # PDCP_API_KEY: your_key_here
     depends_on:
@@ -125,11 +160,14 @@ services:
       context: .
       dockerfile: services/httpx-worker/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
+      <<: *external-tool-env
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
       WORKER_CONCURRENCY: ${HTTPX_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
       LOG_LEVEL: info
+      HTTPX_TIMEOUT_MS: ${HTTPX_TIMEOUT_MS:-120000}
     depends_on:
       api:
         condition: service_healthy
@@ -139,7 +177,9 @@ services:
       context: .
       dockerfile: services/js-worker/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
+      <<: *external-tool-env
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
       WORKER_CONCURRENCY: ${JS_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
@@ -152,24 +192,29 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-yaadyaad}
       S3_BUCKET: ${S3_BUCKET:-js-blobs}
       JS_MAX_BYTES: ${JS_MAX_BYTES:-10485760}
+      GETJS_TIMEOUT_MS: ${GETJS_TIMEOUT_MS:-120000}
+      RETIRE_TIMEOUT_MS: ${RETIRE_TIMEOUT_MS:-300000}
       # Recursion budget for JS-discovered subdomains
       MAX_RECURSION_DEPTH: ${MAX_RECURSION_DEPTH:-2}
     depends_on:
       api:
         condition: service_healthy
       minio:
-        condition: service_started
+        condition: service_healthy
 
   endpoint-worker:
     build:
       context: .
       dockerfile: services/endpoint-worker/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
+      <<: *external-tool-env
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
       WORKER_CONCURRENCY: ${ENDPOINT_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
       LOG_LEVEL: info
+      LINKFINDER_TIMEOUT_MS: ${LINKFINDER_TIMEOUT_MS:-300000}
     depends_on:
       api:
         condition: service_healthy
@@ -179,11 +224,14 @@ services:
       context: .
       dockerfile: services/tech-worker/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
       CULTIVATE_API_URL: http://cultivate-api:3000
-      TECH_WORKER_CONCURRENCY: ${TECH_WORKER_CONCURRENCY:-3}
+      # Cultivate owns one local Chromium at a time so forced cleanup never
+      # races another analysis.
+      TECH_WORKER_CONCURRENCY: 1
       CONFIDENCE_THRESHOLD: 50
       LOG_LEVEL: info
     depends_on:
@@ -197,6 +245,7 @@ services:
       context: .
       dockerfile: services/scheduler/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
@@ -205,10 +254,16 @@ services:
       SCHEDULER_TICK_MS: ${SCHEDULER_TICK_MS:-900000}
       # Max rows re-enqueued per stage per tick
       SCHEDULER_BATCH_SIZE: ${SCHEDULER_BATCH_SIZE:-500}
+      SCHEDULER_RETRY_INTERVAL_HOURS: ${SCHEDULER_RETRY_INTERVAL_HOURS:-6}
+      SCHEDULER_MAX_ENUM_QUEUE: ${SCHEDULER_MAX_ENUM_QUEUE:-10000}
+      SCHEDULER_MAX_SCAN_QUEUE: ${SCHEDULER_MAX_SCAN_QUEUE:-10000}
+      SCHEDULER_MAX_COLLECT_QUEUE: ${SCHEDULER_MAX_COLLECT_QUEUE:-5000}
+      SCHEDULER_MAX_ANALYZE_QUEUE: ${SCHEDULER_MAX_ANALYZE_QUEUE:-20000}
+      SCHEDULER_MAX_TECH_QUEUE: ${SCHEDULER_MAX_TECH_QUEUE:-5000}
       # Re-enumerate a wildcard scope's subdomains after this many hours (7d)
-      RESCAN_ENUM_INTERVAL_HOURS: 168
+      RESCAN_ENUM_INTERVAL_HOURS: ${RESCAN_ENUM_INTERVAL_HOURS:-168}
       # Re-scan a known asset (httpx→js→tech) after this many hours (1d)
-      RESCAN_HTTP_INTERVAL_HOURS: 24
+      RESCAN_HTTP_INTERVAL_HOURS: ${RESCAN_HTTP_INTERVAL_HOURS:-24}
     depends_on:
       api:
         condition: service_healthy
@@ -218,6 +273,7 @@ services:
       context: .
       dockerfile: services/frontend/Dockerfile
     restart: unless-stopped
+    logging: *default-logging
     ports:
       - "3001:3001"
     environment:
