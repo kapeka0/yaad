@@ -198,6 +198,16 @@ function countNewlinesBefore(source: string, offset: number): number {
   return count;
 }
 
+/**
+ * V8 may represent String#slice results as views over the original string.
+ * Grep sessions retain snippets for pagination, so keeping such a view would
+ * also retain an entire multi-megabyte bundle. The UTF-8 round-trip gives the
+ * bounded fragment its own backing store.
+ */
+function detachedSlice(source: string, start: number, end: number): string {
+  return Buffer.from(source.slice(start, end), "utf8").toString("utf8");
+}
+
 export function findMatchSnippet(
   source: string,
   regex: RE2,
@@ -226,7 +236,11 @@ export function findMatchSnippet(
     snippetStartInLine = Math.max(0, rawLineLength - boundedLength);
   }
   const snippetEndInLine = Math.min(rawLineLength, snippetStartInLine + boundedLength);
-  const snippet = source.slice(lineStart + snippetStartInLine, lineStart + snippetEndInLine);
+  const snippet = detachedSlice(
+    source,
+    lineStart + snippetStartInLine,
+    lineStart + snippetEndInLine
+  );
 
   return {
     snippet,
@@ -238,7 +252,7 @@ export function findMatchSnippet(
       0,
       Math.min(snippet.length, matchEndInLine - snippetStartInLine)
     ),
-    matchText: matchedText.slice(0, 256),
+    matchText: detachedSlice(matchedText, 0, 256),
     lineTruncated: snippetStartInLine > 0 || snippetEndInLine < rawLineLength,
     snippetStartColumn: snippetStartInLine + 1,
   };
