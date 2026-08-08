@@ -80,7 +80,7 @@ export interface MatchSnippet {
 }
 
 export interface GrepResult extends GrepOccurrence, MatchSnippet {
-  attribution: "scope" | "unassigned";
+  attribution: "scope";
 }
 
 interface GrepSession {
@@ -129,6 +129,8 @@ export interface JsGrepRequest {
   searchId?: string;
   cursor?: string;
   limit?: number;
+  /** Refresh a completed pattern snapshot when starting a search without an ID/cursor. */
+  force?: boolean;
 }
 
 export interface JsGrepProgressResponse {
@@ -387,6 +389,12 @@ export class DrizzleGrepRepository implements GrepRepository {
       WHERE EXISTS (
         SELECT 1
         FROM javascript_files AS jf
+        JOIN web_services AS ws ON ws.id = jf.service_id
+        JOIN assets AS a ON a.id = ws.asset_id
+        JOIN scopes AS s ON s.id = a.scope_id
+        JOIN programs AS p
+          ON p.id = s.program_id
+         AND nullif(btrim(p.name), '') IS NOT NULL
         WHERE jf.sha256 = jb.sha256
           AND jf.id <= ${snapshotMaxJsId}
       )
@@ -450,8 +458,8 @@ export class DrizzleGrepRepository implements GrepRepository {
         coalesce(array_agg(jf.id ORDER BY jf.id), '{}') AS "occurrenceIds",
         count(jf.id) AS "totalResults",
         count(DISTINCT a.id) AS "totalHosts",
-        count(jf.id) FILTER (WHERE a.scope_id IS NULL) AS "unassignedResults",
-        count(DISTINCT a.id) FILTER (WHERE a.scope_id IS NULL) AS "unassignedHosts"
+        0::bigint AS "unassignedResults",
+        0::bigint AS "unassignedHosts"
       FROM matching_files AS jf
       CROSS JOIN LATERAL (
         SELECT asset_id
@@ -465,6 +473,19 @@ export class DrizzleGrepRepository implements GrepRepository {
         WHERE id = ws.asset_id
         OFFSET 0
       ) AS a
+      CROSS JOIN LATERAL (
+        SELECT id, program_id
+        FROM scopes
+        WHERE id = a.scope_id
+        OFFSET 0
+      ) AS s
+      CROSS JOIN LATERAL (
+        SELECT id
+        FROM programs
+        WHERE id = s.program_id
+          AND nullif(btrim(name), '') IS NOT NULL
+        OFFSET 0
+      ) AS p
     `);
     const row = rows[0] as unknown as {
       occurrenceIds?: number[];
@@ -521,12 +542,48 @@ export class DrizzleGrepRepository implements GrepRepository {
         WHERE id = ws.asset_id
         OFFSET 0
       ) AS a
-      LEFT JOIN scopes AS s ON s.id = a.scope_id
-      LEFT JOIN programs AS p ON p.id = s.program_id
+      CROSS JOIN LATERAL (
+        SELECT id, asset, in_scope, program_id
+        FROM scopes
+        WHERE id = a.scope_id
+        OFFSET 0
+      ) AS s
+      CROSS JOIN LATERAL (
+        SELECT id, name, url, platform
+        FROM programs
+        WHERE id = s.program_id
+          AND nullif(btrim(name), '') IS NOT NULL
+        OFFSET 0
+      ) AS p
       ORDER BY jf.id ASC
     `);
     return [...rows] as unknown as GrepOccurrence[];
   }
+}
+
+/**
+ * A JS Hunt row is only attributable when its host is linked through an
+ * existing scope to an existing, named program. Both in-scope and out-of-scope
+ * records remain attributable. Program URLs remain optional:
+ * several legitimate imported programs do not publish one.
+ */
+export function isProgramBackedOccurrence(
+  row: GrepOccurrence
+): row is GrepOccurrence & {
+  scopeId: number;
+  scopeInScope: boolean;
+  programId: number;
+  programName: string;
+} {
+  return (
+    Number.isSafeInteger(row.scopeId) &&
+    (row.scopeId ?? 0) > 0 &&
+    typeof row.scopeInScope === "boolean" &&
+    Number.isSafeInteger(row.programId) &&
+    (row.programId ?? 0) > 0 &&
+    typeof row.programName === "string" &&
+    row.programName.trim().length > 0
+  );
 }
 
 function normalizePageSize(limit: number | undefined): number {
@@ -734,15 +791,28 @@ export class JsGrepService {
     const pageIds = session.occurrenceIds.slice(low, low + limit);
     const hasMore = low + pageIds.length < session.occurrenceIds.length;
     const rows = await this.repository.listOccurrencesByIds(JSON.stringify(Array.from(pageIds)));
+    if (
+      rows.length !== pageIds.length ||
+      rows.some(
+        (row, index) =>
+          row.jsId !== pageIds[index] || !isProgramBackedOccurrence(row)
+      )
+    ) {
+      this.cache.delete(session.id);
+      throw new JsGrepError(
+        "grep attribution changed during pagination; start a new search",
+        503
+      );
+    }
     const results = rows.map((row): GrepResult => {
       const match = session.matchesByHash.get(row.sha256);
       if (!match) {
+        this.cache.delete(session.id);
         throw new JsGrepError("grep session is inconsistent; start a new search", 503);
       }
       return {
         ...row,
-        programName: row.programName ?? null,
-        attribution: row.scopeId === null ? "unassigned" : "scope",
+        attribution: "scope",
         ...match,
       };
     });
@@ -785,9 +855,23 @@ export class JsGrepService {
     }
 
     const requestedSessionId = cursorPayload?.sessionId ?? request.searchId;
+    const forceNewSnapshot = request.force === true && !request.searchId && !request.cursor;
     let session = requestedSessionId
       ? this.cache.get(requestedSessionId)
       : this.cache.getByPattern(pattern);
+
+    // A manual Search/Restart should not silently reuse a completed snapshot
+    // for the cache TTL. Keep queued/scanning work, however, so duplicate
+    // clicks and SWR retries cannot orphan a full scan or overload the RPi.
+    if (
+      forceNewSnapshot &&
+      session &&
+      session.status !== "queued" &&
+      session.status !== "scanning"
+    ) {
+      this.cache.delete(session.id);
+      session = undefined;
+    }
 
     if (!session && requestedSessionId) {
       throw new JsGrepError("grep search expired; start a new search", 410);

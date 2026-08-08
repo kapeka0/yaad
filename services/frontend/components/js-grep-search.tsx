@@ -7,7 +7,7 @@ import useSWRInfinite from "swr/infinite";
 import { cn } from "@/lib/utils";
 
 const PAGE_SIZE = 100;
-const UNASSIGNED_PROGRAM_LABEL = "Sin programa \u00b7 hist\u00f3rico/no atribuido";
+const MAX_MATCH_CONTEXT_LENGTH = 240;
 const RESULT_ROW_STYLE = {
   contentVisibility: "auto",
   containIntrinsicSize: "84px",
@@ -29,17 +29,18 @@ interface GrepMatch {
   line?: string;
   matchStart: number;
   matchEnd: number;
-  columnNumber?: number;
-  lineTruncated?: boolean;
+}
+
+interface AssignedGrepMatch extends GrepMatch {
+  programName: string;
+  programId: number | string;
 }
 
 interface GrepPage {
-  results: GrepMatch[];
+  results: AssignedGrepMatch[];
   total: number;
   nextCursor: string | null;
   totalHosts?: number;
-  unassignedResults?: number;
-  unassignedHosts?: number;
   matchedBlobs?: number;
   scannedBlobs?: number;
 }
@@ -111,7 +112,12 @@ async function fetchGrepResponse(url: string): Promise<GrepResponse> {
 
   const page = payload as RawGrepPage | null;
   const total = page?.totalResults ?? page?.total;
-  if (!page || !Array.isArray(page.results) || typeof total !== "number") {
+  if (
+    !page ||
+    !Array.isArray(page.results) ||
+    !page.results.every(hasAssignedProgram) ||
+    typeof total !== "number"
+  ) {
     throw new Error("The grep service returned an invalid response");
   }
 
@@ -120,8 +126,6 @@ async function fetchGrepResponse(url: string): Promise<GrepResponse> {
     total,
     nextCursor: page.nextCursor ?? null,
     totalHosts: page.totalHosts,
-    unassignedResults: page.unassignedResults,
-    unassignedHosts: page.unassignedHosts,
     matchedBlobs: page.matchedBlobs,
     scannedBlobs: page.scannedBlobs,
   };
@@ -139,44 +143,64 @@ function resultIdentity(match: GrepMatch): string {
   ].join("\u0000");
 }
 
-function MatchLine({ match }: { match: GrepMatch }) {
+function hasAssignedProgram(match: GrepMatch): match is AssignedGrepMatch {
+  return Boolean(match.programName?.trim()) && match.programId !== null && match.programId !== undefined;
+}
+
+function MatchContext({ match }: { match: GrepMatch }) {
   const line = match.lineText ?? match.snippet ?? match.line ?? "";
   const start = Math.max(0, Math.min(line.length, match.matchStart));
   const end = Math.max(start, Math.min(line.length, match.matchEnd));
-  const hasHighlight = end > start;
+  const matchLength = end - start;
+  const visibleCharacterBudget =
+    line.length > MAX_MATCH_CONTEXT_LENGTH
+      ? MAX_MATCH_CONTEXT_LENGTH - 2
+      : MAX_MATCH_CONTEXT_LENGTH;
+  let contextStart = 0;
+
+  if (line.length > visibleCharacterBudget) {
+    if (matchLength >= visibleCharacterBudget) {
+      contextStart = start + Math.floor((matchLength - visibleCharacterBudget) / 2);
+    } else {
+      const surroundingContext = visibleCharacterBudget - matchLength;
+      contextStart = start - Math.floor(surroundingContext / 2);
+      contextStart = Math.max(0, Math.min(contextStart, line.length - visibleCharacterBudget));
+    }
+  }
+
+  const contextEnd = Math.min(line.length, contextStart + visibleCharacterBudget);
+  const visibleLine = line.slice(contextStart, contextEnd);
+  const visibleMatchStart = Math.max(0, Math.min(visibleLine.length, start - contextStart));
+  const visibleMatchEnd = Math.max(
+    visibleMatchStart,
+    Math.min(visibleLine.length, end - contextStart)
+  );
+  const hasHighlight = visibleMatchEnd > visibleMatchStart;
 
   return (
-    <div className="flex min-w-0 items-start gap-2">
-      <span className="shrink-0 rounded border border-border bg-muted/50 px-1.5 py-0.5 text-[10px] text-muted-foreground">
-        L{match.lineNumber}{typeof match.columnNumber === "number" ? `:C${match.columnNumber}` : ""}
-      </span>
-      <code
-        className="block min-w-0 flex-1 overflow-x-auto whitespace-pre rounded border border-border/70 bg-muted/25 px-2 py-1 text-[11px] leading-5 text-muted-foreground"
-        title={`Line ${match.lineNumber}`}
-      >
-        {hasHighlight ? (
-          <>
-            {line.slice(0, start)}
-            <mark className="rounded-sm bg-amber-400/30 text-foreground ring-1 ring-inset ring-amber-400/40">
-              {line.slice(start, end)}
-            </mark>
-            {line.slice(end)}
-          </>
-        ) : (
-          line || "(empty line)"
-        )}
-      </code>
-      {match.lineTruncated ? (
-        <span className="shrink-0 text-[9px] text-muted-foreground/60" title="Long line; bounded around the exact match">
-          fragment
-        </span>
-      ) : null}
-    </div>
+    <code
+      className="block min-w-0 whitespace-pre-wrap break-all rounded border border-border/70 bg-muted/25 px-2 py-1 text-[11px] leading-5 text-muted-foreground"
+      title={`Exact match context (up to ${MAX_MATCH_CONTEXT_LENGTH} characters)`}
+    >
+      {contextStart > 0 ? "\u2026" : null}
+      {hasHighlight ? (
+        <>
+          {visibleLine.slice(0, visibleMatchStart)}
+          <mark className="rounded-sm bg-amber-400/30 text-foreground ring-1 ring-inset ring-amber-400/40">
+            {visibleLine.slice(visibleMatchStart, visibleMatchEnd)}
+          </mark>
+          {visibleLine.slice(visibleMatchEnd)}
+        </>
+      ) : (
+        visibleLine || "(empty match)"
+      )}
+      {contextEnd < line.length ? "\u2026" : null}
+    </code>
   );
 }
 
-const GrepResultRow = memo(function GrepResultRow({ match }: { match: GrepMatch }) {
-  const program = match.programName?.trim();
+const GrepResultRow = memo(function GrepResultRow({ match }: { match: AssignedGrepMatch }) {
+  const program = match.programName.trim();
   const domainHref = /^https?:\/\//i.test(match.domain)
     ? match.domain
     : `https://${match.domain}`;
@@ -199,7 +223,7 @@ const GrepResultRow = memo(function GrepResultRow({ match }: { match: GrepMatch 
         </a>
       </div>
       <div role="cell" className="min-w-0 px-3 py-2.5">
-        {program && match.programUrl ? (
+        {match.programUrl ? (
           <a
             href={match.programUrl}
             target="_blank"
@@ -211,11 +235,8 @@ const GrepResultRow = memo(function GrepResultRow({ match }: { match: GrepMatch 
             <ExternalLink className="h-2.5 w-2.5 shrink-0" />
           </a>
         ) : (
-          <span
-            className={cn(program ? "text-muted-foreground" : "italic text-muted-foreground/60")}
-            title={program || "No program associated"}
-          >
-            {program || UNASSIGNED_PROGRAM_LABEL}
+          <span className="text-muted-foreground" title={program}>
+            {program}
           </span>
         )}
       </div>
@@ -232,7 +253,7 @@ const GrepResultRow = memo(function GrepResultRow({ match }: { match: GrepMatch 
         </a>
       </div>
       <div role="cell" className="min-w-0 px-3 py-2">
-        <MatchLine match={match} />
+        <MatchContext match={match} />
       </div>
     </div>
   );
@@ -275,6 +296,7 @@ export function JsGrepSearch() {
           limit: String(PAGE_SIZE),
           request: String(searchRequest.id),
         });
+        if (pageIndex === 0) params.set("force", "1");
         if (pageIndex > 0 && previousPage && !isScanning(previousPage)) {
           params.set("cursor", previousPage.nextCursor);
         }
@@ -291,7 +313,7 @@ export function JsGrepSearch() {
     );
 
   const results = useMemo(() => {
-    const unique = new Map<string, GrepMatch>();
+    const unique = new Map<string, AssignedGrepMatch>();
     for (const page of data ?? []) {
       if (isScanning(page)) continue;
       for (const match of page.results) {
@@ -375,7 +397,7 @@ export function JsGrepSearch() {
     <div className="space-y-4">
       <div className="rounded-md border border-border bg-muted/30 p-3 text-xs font-mono">
         <p className="mb-2 text-muted-foreground">
-          Scan every stored JS file with safe RE2 syntax (no lookarounds or backreferences). Results load automatically as you scroll.
+          Scan every stored JS file associated with a program using safe RE2 syntax (no lookarounds or backreferences). Results load automatically as you scroll.
         </p>
         <form onSubmit={handleSubmit} className="flex flex-col gap-2 sm:flex-row">
           <div className="relative flex-1">
@@ -413,7 +435,7 @@ export function JsGrepSearch() {
             className="mb-3 h-12 w-12 grayscale opacity-40"
           />
           <p className="max-w-sm text-xs font-mono text-muted-foreground">
-            Grep stored JS bundles for a signature and see the exact matching line.
+            Grep stored JS bundles for a signature and see the exact match context.
           </p>
         </div>
       ) : null}
@@ -421,7 +443,7 @@ export function JsGrepSearch() {
       {isInitialLoading ? (
         <div className="flex items-center justify-center gap-2 py-12 text-xs font-mono text-muted-foreground">
           <Loader2 className="h-4 w-4 animate-spin text-primary" />
-          Searching all stored JS files...
+          Searching all program-associated JS files...
         </div>
       ) : null}
 
@@ -430,7 +452,7 @@ export function JsGrepSearch() {
           <div className="flex flex-wrap items-center justify-between gap-2 text-muted-foreground">
             <span className="inline-flex items-center gap-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
-              Scanning stored JS blobs...
+              Scanning program-associated JS blobs...
             </span>
             <span>
               {NUMBER_FORMAT.format(scanProgress.scannedBlobs)} / {NUMBER_FORMAT.format(scanProgress.totalBlobs)}
@@ -484,13 +506,6 @@ export function JsGrepSearch() {
               {typeof metrics?.scannedBlobs === "number"
                 ? ` / ${NUMBER_FORMAT.format(metrics.scannedBlobs)} JS blobs scanned`
                 : ""}
-              {typeof metrics?.unassignedResults === "number" && metrics.unassignedResults > 0
-                ? ` / ${NUMBER_FORMAT.format(metrics.unassignedResults)} unassigned results${
-                    typeof metrics.unassignedHosts === "number"
-                      ? ` on ${NUMBER_FORMAT.format(metrics.unassignedHosts)} hosts`
-                      : ""
-                  }`
-                : ""}
             </span>
             <span>
               Loaded {NUMBER_FORMAT.format(results.length)} of {NUMBER_FORMAT.format(total)}
@@ -507,7 +522,7 @@ export function JsGrepSearch() {
                   <div role="columnheader" className="px-3 py-2">Subdomain</div>
                   <div role="columnheader" className="px-3 py-2">Program</div>
                   <div role="columnheader" className="px-3 py-2">JavaScript file</div>
-                  <div role="columnheader" className="px-3 py-2">Line / exact match</div>
+                  <div role="columnheader" className="px-3 py-2">Match</div>
                 </div>
                 <div role="rowgroup">
                   {results.map((match) => (

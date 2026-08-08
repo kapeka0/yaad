@@ -404,6 +404,7 @@ async function bootstrap() {
         searchId: c.req.query("searchId"),
         cursor: c.req.query("cursor"),
         limit: parsedLimit,
+        force: c.req.query("force") === "1",
       });
       if (response.statusCode === 202) return c.json(response.body, 202);
       if (response.statusCode === 503) return c.json(response.body, 503);

@@ -22,8 +22,10 @@ export async function GET(req: NextRequest) {
   const backendParams = new URLSearchParams({ q, limit: String(limit) });
   const searchId = searchParams.get("searchId");
   const cursor = searchParams.get("cursor");
+  const force = searchParams.get("force");
   if (searchId) backendParams.set("searchId", searchId);
   if (cursor) backendParams.set("cursor", cursor);
+  if (force === "1") backendParams.set("force", "1");
 
   const apiUrl = process.env.API_URL || "http://api:3000";
   try {
