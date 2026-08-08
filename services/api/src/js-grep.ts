@@ -428,7 +428,9 @@ export class DrizzleGrepRepository implements GrepRepository {
     }>`
       WITH matched_hashes AS MATERIALIZED (
         SELECT value AS sha256
-        FROM jsonb_array_elements_text(${matchedHashesJson}::jsonb) AS hashes(value)
+        -- Force the driver parameter to text first. Inferring jsonb directly
+        -- serializes an already-encoded JSON string as a scalar JSON string.
+        FROM jsonb_array_elements_text((${matchedHashesJson}::text)::jsonb) AS hashes(value)
       ),
       matching_files AS MATERIALIZED (
         SELECT jf.id, jf.service_id
@@ -485,7 +487,7 @@ export class DrizzleGrepRepository implements GrepRepository {
     const rows = await this.db.execute(sql<GrepOccurrence>`
       WITH selected_ids AS MATERIALIZED (
         SELECT value::integer AS id
-        FROM jsonb_array_elements_text(${jsIdsJson}::jsonb) AS ids(value)
+        FROM jsonb_array_elements_text((${jsIdsJson}::text)::jsonb) AS ids(value)
       )
       SELECT
         jf.id AS "jsId",
