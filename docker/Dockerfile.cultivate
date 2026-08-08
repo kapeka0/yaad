@@ -73,7 +73,7 @@ ENV PORT=3000
 
 EXPOSE 3000
 
-HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=2 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=4 \
   CMD wget -qO- http://localhost:3000/health >/dev/null || exit 1
 
 STOPSIGNAL SIGTERM
