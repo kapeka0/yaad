@@ -6,6 +6,8 @@ const PLATFORM_ICONS: Readonly<Record<string, string>> = {
   private: "/icons/HSTS.svg",
 };
 
+const DARK_MODE_INVERTED_PLATFORMS = new Set(["hackerone", "intigriti"]);
+
 export function PlatformIcon({ platform }: { platform: string }) {
   const normalizedPlatform = platform.trim().toLowerCase();
   const src = PLATFORM_ICONS[normalizedPlatform];
@@ -33,7 +35,7 @@ export function PlatformIcon({ platform }: { platform: string }) {
       loading="lazy"
       decoding="async"
       className={`size-4 shrink-0 rounded-sm object-contain ${
-        normalizedPlatform === "hackerone" ? "dark:invert" : ""
+        DARK_MODE_INVERTED_PLATFORMS.has(normalizedPlatform) ? "dark:invert" : ""
       }`}
     />
   );
