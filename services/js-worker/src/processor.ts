@@ -127,6 +127,16 @@ export async function processCollectJs(
   console.log(JSON.stringify({ level: "info", msg: `Collecting JS from ${url}` }));
 
   const ctx = await loadServiceContext(db, serviceId);
+  if (!ctx) {
+    console.log(
+      JSON.stringify({
+        level: "info",
+        msg: "Skipping JS collection outside an active scope",
+        serviceId,
+      })
+    );
+    return;
+  }
   const jsUrls = await runGetJS(url);
   const readyForEndpointAnalysis = new Map<number, string>();
   const failedJsUrls: string[] = [];

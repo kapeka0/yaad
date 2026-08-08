@@ -1,6 +1,6 @@
 import { Queue } from "bullmq";
 import type { Db } from "@yaad/db";
-import { webServices, technologies, assetTechnologies, assets } from "@yaad/db";
+import { webServices, technologies, assetTechnologies, assets, scopes } from "@yaad/db";
 import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
 import type { ScanHttpJob, CollectJsJob, DetectTechnologyJob } from "@yaad/queue";
 import { sql, eq } from "drizzle-orm";
@@ -13,6 +13,19 @@ export async function processScanHttp(
   detectTechQueue: Queue<DetectTechnologyJob>
 ): Promise<void> {
   const { domain, assetId } = job.data;
+
+  const [target] = await db
+    .select({ inScope: scopes.inScope })
+    .from(assets)
+    .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+    .where(eq(assets.id, assetId))
+    .limit(1);
+  if (!target?.inScope) {
+    console.log(
+      JSON.stringify({ level: "info", msg: "Skipping HTTP scan outside an active scope", assetId })
+    );
+    return;
+  }
 
   console.log(JSON.stringify({ level: "info", msg: `Scanning HTTP for ${domain}` }));
 

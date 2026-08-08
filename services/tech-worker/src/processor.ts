@@ -1,8 +1,8 @@
 import type { Db } from "@yaad/db";
-import { technologies, assetTechnologies } from "@yaad/db";
+import { technologies, assetTechnologies, assets, scopes } from "@yaad/db";
 import type { DetectTechnologyJob } from "@yaad/queue";
 import { detectTechnologies } from "./client.js";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 export async function processDetectTechnology(
   job: { data: DetectTechnologyJob },
@@ -11,6 +11,19 @@ export async function processDetectTechnology(
   confidenceThreshold: number
 ): Promise<void> {
   const { url, assetId } = job.data;
+
+  const [target] = await db
+    .select({ inScope: scopes.inScope })
+    .from(assets)
+    .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+    .where(eq(assets.id, assetId))
+    .limit(1);
+  if (!target?.inScope) {
+    console.log(
+      JSON.stringify({ level: "info", msg: "Skipping technology scan outside an active scope", assetId })
+    );
+    return;
+  }
 
   console.log(JSON.stringify({ level: "info", msg: `Detecting technologies for ${url}` }));
 

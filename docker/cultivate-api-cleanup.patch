@@ -1,5 +1,5 @@
 diff --git a/api.js b/api.js
-index b6c7764..950c556 100644
+index b6c7764..6fa8dcc 100644
 --- a/api.js
 +++ b/api.js
 @@ -2,6 +2,7 @@
@@ -185,7 +185,7 @@ index b6c7764..950c556 100644
  });
 
  /**
-@@ -178,28 +315,53 @@ app.get("/health", (req, res) => {
+@@ -178,28 +315,55 @@ app.get("/health", (req, res) => {
   */
  // Main analyze endpoint
  app.post("/analyze", async (req, res) => {
@@ -220,6 +220,8 @@ index b6c7764..950c556 100644
 +  let wappalyzer;
 +  let launchAttempted = false;
 +  let browserReady = false;
++  let responseStatus = 200;
++  let responseBody;
 +
    try {
      console.log(
@@ -255,7 +257,7 @@ index b6c7764..950c556 100644
      }
 
      // Extract headers from request if provided
-@@ -216,7 +378,10 @@ app.post("/analyze", async (req, res) => {
+@@ -216,7 +380,10 @@ app.post("/analyze", async (req, res) => {
        debug: options.debug || false,
        delay: options.delay || 500,
        maxUrls: options.maxUrls || 1,
@@ -267,7 +269,7 @@ index b6c7764..950c556 100644
        recursive: options.recursive || false,
        probe: options.probe || false,
        userAgent:
-@@ -235,17 +400,25 @@ app.post("/analyze", async (req, res) => {
+@@ -235,17 +402,25 @@ app.post("/analyze", async (req, res) => {
        console.log("Request headers:", req.headers);
      }
      // Initialize wappalyzer
@@ -300,9 +302,12 @@ index b6c7764..950c556 100644
      console.log(
        pc.green(`INFO`) +
          ` [${new Date().toISOString()}] (Cultivate API): Analysis complete for URL: ${url}`
-@@ -259,6 +432,10 @@ app.post("/analyze", async (req, res) => {
+@@ -257,19 +432,36 @@ app.post("/analyze", async (req, res) => {
+         name: tech.name,
+       }))
      );
-     return res.json(results);
+-    return res.json(results);
++    responseBody = results;
    } catch (error) {
 +    if (launchAttempted && !browserReady) {
 +      consecutiveLaunchFailures += 1;
@@ -311,10 +316,16 @@ index b6c7764..950c556 100644
      console.error(
        pc.red(`ERROR`) +
          ` [${new Date().toISOString()}] (Cultivate API): Analysis error:`,
-@@ -269,6 +446,16 @@ app.post("/analyze", async (req, res) => {
+       error
+     );
+
+-    return res.status(500).json({
++    responseStatus = 500;
++    responseBody = {
        error: "Analysis failed",
        message: error.message || String(error),
-     });
+-    });
++    };
 +  } finally {
 +    await cleanupAnalysis(wappalyzer);
 +    activeAnalyses -= 1;
@@ -326,9 +337,12 @@ index b6c7764..950c556 100644
 +      setImmediate(() => recycle("repeated Chromium lifecycle failures"));
 +    }
    }
++
++  return res.status(responseStatus).json(responseBody);
  });
 
-@@ -284,31 +471,58 @@ const server = app.listen(port, () => {
+ app.get("/", (req, res) => {
+@@ -284,31 +476,58 @@ const server = app.listen(port, () => {
    );
  });
 

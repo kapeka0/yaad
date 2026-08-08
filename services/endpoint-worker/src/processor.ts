@@ -226,6 +226,14 @@ export async function processAnalyzeJs(
     return;
   }
 
+  // Historical queues contain third-party assets discovered before scope
+  // propagation was enforced. Drain them without network or database fan-out;
+  // if an operator later links the asset, its NULL checkpoint remains healable.
+  if (!input.parentScope) {
+    console.log(JSON.stringify({ level: "info", msg: "Skipping unscoped JS analysis", jsId }));
+    return;
+  }
+
   // Lazily checkpoint historical rows that already produced endpoints before
   // endpoint_analyzed_at existed, avoiding a mass re-analysis migration.
   const [existingEndpoint] = await db
