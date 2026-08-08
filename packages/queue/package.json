@@ -11,12 +11,14 @@
     }
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json"
+    "build": "tsc -p tsconfig.json",
+    "test": "pnpm build && node --test dist/shutdown.test.js"
   },
   "dependencies": {
     "bullmq": "^5.7.8"
   },
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "typescript": "^5.4.5"
   }
 }

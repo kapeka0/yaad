@@ -21,7 +21,10 @@ async function main(): Promise<void> {
   const worker = new Worker<AnalyzeJsJob>(
     QUEUES.ANALYZE_JS,
     async (job) => {
-      await processAnalyzeJs(job, db, scanQueue, detectTechQueue);
+      await processAnalyzeJs(job, db, scanQueue, detectTechQueue, {
+        maxScanQueueDepth: config.scheduler.maxScanQueueDepth,
+        maxTechQueueDepth: config.scheduler.maxTechQueueDepth,
+      });
     },
     {
       connection: redisOptions,

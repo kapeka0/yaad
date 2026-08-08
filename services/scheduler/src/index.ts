@@ -58,7 +58,14 @@ async function main(): Promise<void> {
     }
     running = true;
     try {
-      await runTick(db, enumerateQueue, scanQueue, scheduler, downstreamQueues);
+      await runTick(
+        db,
+        enumerateQueue,
+        scanQueue,
+        detectTechQueue,
+        scheduler,
+        downstreamQueues
+      );
     } catch (err) {
       log("error", "Scheduler tick failed", { error: String(err) });
     } finally {

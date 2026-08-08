@@ -1,3 +1,5 @@
+import { getToolTimeoutMs } from "@yaad/subprocess";
+
 export async function getSubdomainsFromPDCP(
   domain: string,
   apiKey: string
@@ -5,11 +7,13 @@ export async function getSubdomainsFromPDCP(
   const subdomains: string[] = [];
   let page = 1;
   const limit = 100;
+  const signal = AbortSignal.timeout(getToolTimeoutMs("PDCP_TIMEOUT_MS", 60_000));
 
   while (true) {
     const url = `https://api.projectdiscovery.io/v1/domain/associated?domain=${encodeURIComponent(domain)}&raw=true&limit=${limit}&page=${page}`;
     const res = await fetch(url, {
       headers: { "X-Api-Key": apiKey },
+      signal,
     });
 
     if (!res.ok) {

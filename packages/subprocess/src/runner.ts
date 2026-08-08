@@ -7,6 +7,26 @@ const DEFAULT_KILL_GRACE_MS = 5_000;
 const DEFAULT_STDERR_MAX_BYTES = 64 * 1024;
 const ERROR_STDERR_PREVIEW_CHARS = 1_000;
 
+// External tools often outlive the Node worker that launched them unless they
+// are explicitly interrupted during a container update. A single process-wide
+// signal is shared by every invocation and combined with any caller signal.
+const processShutdownController = new AbortController();
+let processShutdownListenersInstalled = false;
+
+function getProcessShutdownSignal(): AbortSignal {
+  if (!processShutdownListenersInstalled) {
+    processShutdownListenersInstalled = true;
+    const abort = (signal: NodeJS.Signals): void => {
+      if (!processShutdownController.signal.aborted) {
+        processShutdownController.abort(new Error(`Worker received ${signal}`));
+      }
+    };
+    process.once("SIGTERM", () => abort("SIGTERM"));
+    process.once("SIGINT", () => abort("SIGINT"));
+  }
+  return processShutdownController.signal;
+}
+
 export type ProcessFailureReason =
   | "spawn"
   | "exit"
@@ -131,6 +151,9 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
     positiveInteger(process.env.EXTERNAL_TOOL_STDERR_MAX_BYTES) ??
     DEFAULT_STDERR_MAX_BYTES;
   const allowedExitCodes = new Set(options.allowedExitCodes ?? [0]);
+  const abortSignals = [getProcessShutdownSignal(), options.signal].filter(
+    (signal): signal is AbortSignal => signal !== undefined,
+  );
 
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
     throw new TypeError("timeoutMs must be a positive integer");
@@ -142,7 +165,8 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
     throw new TypeError("stderrMaxBytes must be a non-negative integer");
   }
 
-  if (options.signal?.aborted) {
+  const alreadyAborted = abortSignals.find((signal) => signal.aborted);
+  if (alreadyAborted) {
     throw processError(options.command, "abort", `${options.command} was aborted`, {
       exitCode: null,
       signal: null,
@@ -150,7 +174,7 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
       stderrTruncated: false,
       timedOut: false,
       aborted: true,
-      cause: options.signal.reason,
+      cause: alreadyAborted.reason,
     });
   }
 
@@ -251,13 +275,13 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
     timeoutTimer.unref();
 
     const onAbort = (): void => requestStop("abort");
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    if (options.signal?.aborted) requestStop("abort");
+    abortSignals.forEach((signal) => signal.addEventListener("abort", onAbort, { once: true }));
+    if (abortSignals.some((signal) => signal.aborted)) requestStop("abort");
 
     const cleanup = (): void => {
       clearTimeout(timeoutTimer);
       if (forceKillTimer) clearTimeout(forceKillTimer);
-      options.signal?.removeEventListener("abort", onAbort);
+      abortSignals.forEach((signal) => signal.removeEventListener("abort", onAbort));
       stdout.close();
     };
 
@@ -312,7 +336,7 @@ export async function runProcess(options: RunProcessOptions): Promise<ProcessRes
         reject(
           processError(options.command, "abort", `${options.command} was aborted`, {
             ...common,
-            cause: options.signal?.reason,
+            cause: abortSignals.find((abortSignal) => abortSignal.aborted)?.reason,
           }),
         );
         return;

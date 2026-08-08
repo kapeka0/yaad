@@ -3,7 +3,7 @@ import { and, or, eq, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import type { Db } from "@yaad/db";
 import { scopes, assets } from "@yaad/db";
 import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
-import type { EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
+import type { DetectTechnologyJob, EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
 import type { SchedulerSettings } from "@yaad/config";
 
 const HOSTNAME_PATTERN =
@@ -185,19 +185,153 @@ export async function refreshStaleAssets(
   return rows.length;
 }
 
+export interface EndpointFanoutRecoveryResult {
+  scans: number;
+  technologies: number;
+}
+
+export function buildEndpointRecoveryJobs(
+  scanRows: Array<{ id: number; domain: string }>,
+  techRows: Array<{ id: number; url: string }>,
+  bucket: number
+) {
+  return {
+    scanJobs: scanRows.map((row) => ({
+      name: "scan_http" as const,
+      data: { domain: row.domain, assetId: row.id },
+      opts: {
+        ...DEFAULT_JOB_OPTIONS,
+        jobId: `endpoint-recovery-scan-${row.id}-${bucket}`,
+      },
+    })),
+    techJobs: techRows.map((row) => ({
+      name: "detect_technology" as const,
+      data: { url: row.url, assetId: row.id },
+      opts: {
+        ...DEFAULT_JOB_OPTIONS,
+        jobId: `endpoint-recovery-tech-${row.id}-${bucket}`,
+      },
+    })),
+  };
+}
+
+/**
+ * Recover child jobs accepted by Redis but never completed. Endpoint assets
+ * may still be unresolved, so they cannot rely on the normal resolved-only
+ * HTTP refresh path. Bucketed IDs also bypass an exhausted failed BullMQ job.
+ */
+export async function refreshEndpointFanout(
+  db: Db,
+  scanQueue: Queue<ScanHttpJob>,
+  detectTechQueue: Queue<DetectTechnologyJob>,
+  settings: SchedulerSettings
+): Promise<EndpointFanoutRecoveryResult> {
+  const [scanDepth, techDepth] = await Promise.all([
+    getQueueDepth(scanQueue),
+    getQueueDepth(detectTechQueue),
+  ]);
+  const scanLimit = Math.min(
+    settings.batchSize,
+    Math.max(0, settings.maxScanQueueDepth - scanDepth)
+  );
+  const techLimit = Math.min(
+    settings.batchSize,
+    Math.max(0, settings.maxTechQueueDepth - techDepth)
+  );
+  const retryBefore = sql`now() - ${`${settings.retryIntervalHours} hours`}::interval`;
+  const attemptedAt = new Date();
+  const bucket = retryBucket(attemptedAt, settings.retryIntervalHours);
+
+  let scanRows: Array<{ id: number; domain: string }> = [];
+  if (scanLimit > 0) {
+    scanRows = await db
+      .select({ id: assets.id, domain: assets.domain })
+      .from(assets)
+      .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+      .where(
+        and(
+          eq(scopes.inScope, true),
+          sql`${assets.domain} ~ ${HOSTNAME_PATTERN}`,
+          isNotNull(assets.endpointFanoutManagedAt),
+          isNull(assets.lastScannedAt),
+          or(
+            isNull(assets.endpointScanEnqueuedAt),
+            lt(assets.endpointScanEnqueuedAt, retryBefore)
+          )
+        )
+      )
+      .orderBy(sql`${assets.endpointScanEnqueuedAt} asc nulls first`)
+      .limit(scanLimit);
+
+    if (scanRows.length > 0) {
+      const { scanJobs } = buildEndpointRecoveryJobs(scanRows, [], bucket);
+      await scanQueue.addBulk(scanJobs);
+      await db
+        .update(assets)
+        .set({ endpointScanEnqueuedAt: attemptedAt })
+        .where(inArray(assets.id, scanRows.map((row) => row.id)));
+    }
+  }
+
+  let techRows: Array<{ id: number; url: string }> = [];
+  if (techLimit > 0) {
+    techRows = await db
+      .select({ id: assets.id, url: assets.endpointTechUrl })
+      .from(assets)
+      .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+      .where(
+        and(
+          eq(scopes.inScope, true),
+          isNotNull(assets.endpointFanoutManagedAt),
+          isNotNull(assets.endpointTechUrl),
+          isNull(assets.lastTechnologyScannedAt),
+          or(
+            isNull(assets.endpointTechEnqueuedAt),
+            lt(assets.endpointTechEnqueuedAt, retryBefore)
+          )
+        )
+      )
+      .orderBy(sql`${assets.endpointTechEnqueuedAt} asc nulls first`)
+      .limit(techLimit) as Array<{ id: number; url: string }>;
+
+    if (techRows.length > 0) {
+      const { techJobs } = buildEndpointRecoveryJobs([], techRows, bucket);
+      await detectTechQueue.addBulk(techJobs);
+      await db
+        .update(assets)
+        .set({ endpointTechEnqueuedAt: attemptedAt })
+        .where(inArray(assets.id, techRows.map((row) => row.id)));
+    }
+  }
+
+  if (scanRows.length > 0 || techRows.length > 0) {
+    log("info", "Recovered endpoint fan-out", {
+      scans: scanRows.length,
+      technologies: techRows.length,
+      scanQueueDepthBefore: scanDepth,
+      techQueueDepthBefore: techDepth,
+    });
+  }
+  return { scans: scanRows.length, technologies: techRows.length };
+}
+
 export async function runTick(
   db: Db,
   enumerateQueue: Queue<EnumerateSubdomainsJob>,
   scanQueue: Queue<ScanHttpJob>,
+  detectTechQueue: Queue<DetectTechnologyJob>,
   settings: SchedulerSettings,
   downstreamQueues: QueuePressureSource[] = []
 ): Promise<void> {
-  const [enumCount, scanCount] = await Promise.all([
+  const [enumCount, endpointRecovery] = await Promise.all([
     refreshStaleScopes(db, enumerateQueue, settings),
-    refreshStaleAssets(db, scanQueue, settings, downstreamQueues),
+    refreshEndpointFanout(db, scanQueue, detectTechQueue, settings),
   ]);
+  const scanCount = await refreshStaleAssets(db, scanQueue, settings, downstreamQueues);
   log("info", "Scheduler tick complete", {
     scopesReEnumerated: enumCount,
     assetsReScanned: scanCount,
+    endpointScansRecovered: endpointRecovery.scans,
+    endpointTechnologiesRecovered: endpointRecovery.technologies,
   });
 }

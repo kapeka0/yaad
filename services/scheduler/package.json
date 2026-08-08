@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc --build --force tsconfig.json",
     "start": "node dist/index.js",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "test": "tsx --test test/*.test.ts"
   },
   "dependencies": {
     "@yaad/config": "workspace:*",

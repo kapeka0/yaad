@@ -135,6 +135,7 @@ services:
       context: .
       dockerfile: services/subdomain-worker/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 70s
     logging: *default-logging
     environment:
       <<: *external-tool-env
@@ -147,10 +148,12 @@ services:
       GAU_ENABLED: ${GAU_ENABLED:-true}
       SUBFINDER_DEEP: ${SUBFINDER_DEEP:-true}
       SUBFINDER_TIMEOUT_MS: ${SUBFINDER_TIMEOUT_MS:-900000}
+      CRTSH_TIMEOUT_MS: ${CRTSH_TIMEOUT_MS:-30000}
       GAU_TIMEOUT_MS: ${GAU_TIMEOUT_MS:-600000}
       DNSX_TIMEOUT_MS: ${DNSX_TIMEOUT_MS:-600000}
+      PDCP_TIMEOUT_MS: ${PDCP_TIMEOUT_MS:-60000}
+      PDCP_API_KEY: ${PDCP_API_KEY:-}
       MAX_RECURSION_DEPTH: ${MAX_RECURSION_DEPTH:-2}
-      # PDCP_API_KEY: your_key_here
     depends_on:
       api:
         condition: service_healthy
@@ -160,6 +163,7 @@ services:
       context: .
       dockerfile: services/httpx-worker/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 70s
     logging: *default-logging
     environment:
       <<: *external-tool-env
@@ -177,6 +181,7 @@ services:
       context: .
       dockerfile: services/js-worker/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 70s
     logging: *default-logging
     environment:
       <<: *external-tool-env
@@ -207,6 +212,7 @@ services:
       context: .
       dockerfile: services/endpoint-worker/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 70s
     logging: *default-logging
     environment:
       <<: *external-tool-env
@@ -215,6 +221,8 @@ services:
       WORKER_CONCURRENCY: ${ENDPOINT_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
       LOG_LEVEL: info
       LINKFINDER_TIMEOUT_MS: ${LINKFINDER_TIMEOUT_MS:-300000}
+      SCHEDULER_MAX_SCAN_QUEUE: ${SCHEDULER_MAX_SCAN_QUEUE:-10000}
+      SCHEDULER_MAX_TECH_QUEUE: ${SCHEDULER_MAX_TECH_QUEUE:-5000}
     depends_on:
       api:
         condition: service_healthy
@@ -224,6 +232,7 @@ services:
       context: .
       dockerfile: services/tech-worker/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 70s
     logging: *default-logging
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
@@ -245,6 +254,7 @@ services:
       context: .
       dockerfile: services/scheduler/Dockerfile
     restart: unless-stopped
+    stop_grace_period: 70s
     logging: *default-logging
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad

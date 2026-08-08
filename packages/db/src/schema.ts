@@ -66,6 +66,14 @@ export const assets = pgTable(
     lastScannedAt: timestamp("last_scanned_at"),
     // Last time the scheduler queued an HTTP scan attempt.
     lastScanAttemptAt: timestamp("last_scan_attempt_at"),
+    // Endpoint discovery fan-out is global per asset. These durable enqueue
+    // checkpoints prevent the same host, cited by many JS files, from
+    // multiplying scan and technology jobs.
+    endpointScanEnqueuedAt: timestamp("endpoint_scan_enqueued_at"),
+    endpointTechEnqueuedAt: timestamp("endpoint_tech_enqueued_at"),
+    endpointFanoutManagedAt: timestamp("endpoint_fanout_managed_at"),
+    endpointTechUrl: text("endpoint_tech_url"),
+    lastTechnologyScannedAt: timestamp("last_technology_scanned_at"),
   },
   (t) => ({
     // Scheduler scans oldest-first; index makes the staleness query cheap.
@@ -74,6 +82,12 @@ export const assets = pgTable(
     schedulerReadyIdx: index("assets_scheduler_ready_idx")
       .on(t.lastScannedAt, t.lastScanAttemptAt)
       .where(sql`${t.scopeId} is not null and ${t.resolved} = true`),
+    endpointScanRecoveryIdx: index("assets_endpoint_scan_recovery_idx")
+      .on(t.lastScannedAt, t.endpointScanEnqueuedAt)
+      .where(sql`${t.endpointFanoutManagedAt} is not null`),
+    endpointTechRecoveryIdx: index("assets_endpoint_tech_recovery_idx")
+      .on(t.lastTechnologyScannedAt, t.endpointTechEnqueuedAt)
+      .where(sql`${t.endpointFanoutManagedAt} is not null and ${t.endpointTechUrl} is not null`),
   })
 );
 
@@ -126,6 +140,9 @@ export const javascriptFiles = pgTable(
     // Set by endpoint-worker only after LinkFinder output was persisted and
     // scoped fan-out completed. NULL rows can be safely recovered later.
     endpointAnalyzedAt: timestamp("endpoint_analyzed_at"),
+    // Distinguishes legacy endpoint rows from a new, potentially partial
+    // attempt. Set before LinkFinder or any fan-out side effect.
+    endpointAnalysisStartedAt: timestamp("endpoint_analysis_started_at"),
   },
   (t) => ({
     uniqServiceUrl: uniqueIndex("javascript_files_service_url_idx").on(t.serviceId, t.url),

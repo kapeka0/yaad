@@ -1,5 +1,5 @@
 import { Queue } from "bullmq";
-import { and, eq, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Db } from "@yaad/db";
 import { assets, endpoints, javascriptFiles, scopes, webServices } from "@yaad/db";
 import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
@@ -11,7 +11,7 @@ import { runLinkfinder } from "./runner.js";
 // LinkFinder occasionally emits entire inline payloads as a single endpoint.
 export const MAX_ENDPOINT_BYTES = 2_048;
 export const MAX_ENDPOINTS_PER_JS = 2_000;
-const ENDPOINT_INSERT_BATCH_SIZE = 250;
+export const ENDPOINT_INSERT_BATCH_SIZE = 250;
 
 interface ParentScopeContext {
   scopeId: number;
@@ -23,13 +23,32 @@ interface AnalysisInput {
   jsUrl: string;
   fetchedAt: Date | null;
   endpointAnalyzedAt: Date | null;
+  endpointAnalysisStartedAt: Date | null;
   parentScope: ParentScopeContext | null;
 }
 
-interface EndpointCandidate {
+export interface EndpointCandidate {
   endpoint: string;
   hostname: string | null;
 }
+
+export interface EndpointAnalysisOperations {
+  findEndpoints: (jsUrl: string) => Promise<string[]>;
+  persistEndpoints: (jsId: number, candidates: EndpointCandidate[]) => Promise<void>;
+  loadPersistedEndpoints: (jsId: number) => Promise<string[]>;
+  fanOut: (jsId: number, candidates: EndpointCandidate[]) => Promise<void>;
+  markComplete: (jsId: number) => Promise<void>;
+}
+
+export interface EndpointFanoutLimits {
+  maxScanQueueDepth: number;
+  maxTechQueueDepth: number;
+}
+
+const UNBOUNDED_FANOUT: EndpointFanoutLimits = {
+  maxScanQueueDepth: Number.MAX_SAFE_INTEGER,
+  maxTechQueueDepth: Number.MAX_SAFE_INTEGER,
+};
 
 /**
  * A discovered host belongs to a scope only when it is the scope root or a
@@ -79,6 +98,7 @@ async function loadAnalysisInput(db: Db, jsId: number): Promise<AnalysisInput | 
       jsUrl: javascriptFiles.url,
       fetchedAt: javascriptFiles.fetchedAt,
       endpointAnalyzedAt: javascriptFiles.endpointAnalyzedAt,
+      endpointAnalysisStartedAt: javascriptFiles.endpointAnalysisStartedAt,
       scopeId: assets.scopeId,
       parentDepth: assets.depth,
       scopeAsset: scopes.asset,
@@ -109,8 +129,21 @@ async function loadAnalysisInput(db: Db, jsId: number): Promise<AnalysisInput | 
     jsUrl: row.jsUrl,
     fetchedAt: row.fetchedAt,
     endpointAnalyzedAt: row.endpointAnalyzedAt,
+    endpointAnalysisStartedAt: row.endpointAnalysisStartedAt,
     parentScope,
   };
+}
+
+async function markEndpointAnalysisStarted(db: Db, jsId: number): Promise<void> {
+  await db
+    .update(javascriptFiles)
+    .set({ endpointAnalysisStartedAt: new Date() })
+    .where(
+      and(
+        eq(javascriptFiles.id, jsId),
+        isNull(javascriptFiles.endpointAnalysisStartedAt)
+      )
+    );
 }
 
 async function markEndpointAnalysisComplete(db: Db, jsId: number): Promise<void> {
@@ -125,13 +158,91 @@ async function insertEndpointBatches(
   jsId: number,
   candidates: EndpointCandidate[]
 ): Promise<void> {
-  for (let offset = 0; offset < candidates.length; offset += ENDPOINT_INSERT_BATCH_SIZE) {
-    const batch = candidates.slice(offset, offset + ENDPOINT_INSERT_BATCH_SIZE);
+  await persistEndpointBatches(jsId, candidates, async (batch) => {
     await db
       .insert(endpoints)
-      .values(batch.map(({ endpoint }) => ({ jsId, endpoint })))
+      .values(batch)
       .onConflictDoNothing();
+  });
+}
+
+/**
+ * Persist bounded endpoint output in restart-safe batches. The callback is
+ * deliberately exposed so retry behavior can be tested without PostgreSQL.
+ */
+export async function persistEndpointBatches(
+  jsId: number,
+  candidates: EndpointCandidate[],
+  insertBatch: (rows: Array<{ jsId: number; endpoint: string }>) => Promise<void>
+): Promise<void> {
+  for (let offset = 0; offset < candidates.length; offset += ENDPOINT_INSERT_BATCH_SIZE) {
+    const batch = candidates.slice(offset, offset + ENDPOINT_INSERT_BATCH_SIZE);
+    await insertBatch(batch.map(({ endpoint }) => ({ jsId, endpoint })));
   }
+}
+
+async function loadPersistedEndpointValues(db: Db, jsId: number): Promise<string[]> {
+  const rows = await db
+    .select({ endpoint: endpoints.endpoint })
+    .from(endpoints)
+    .where(eq(endpoints.jsId, jsId))
+    .orderBy(endpoints.id)
+    .limit(MAX_ENDPOINTS_PER_JS);
+
+  return rows.map((row) => row.endpoint);
+}
+
+/**
+ * A failed attempt may already have persisted a subset of endpoints. Merge
+ * them with the fresh LinkFinder result so retries also recover their fan-out.
+ */
+export async function runEndpointAnalysisAttempt(
+  jsId: number,
+  jsUrl: string,
+  operations: EndpointAnalysisOperations
+): Promise<{ found: number; accepted: number }> {
+  const foundEndpoints = await operations.findEndpoints(jsUrl);
+  const candidates = sanitizeEndpointCandidates(foundEndpoints);
+  const persistedEndpoints = await operations.loadPersistedEndpoints(jsId);
+  const recoveryCandidates = sanitizeEndpointCandidates([
+    // Persisted rows come first so a changed LinkFinder result cannot crowd
+    // partial work from an earlier attempt out of the bounded recovery set.
+    ...persistedEndpoints,
+    ...candidates.map(({ endpoint }) => endpoint),
+  ]);
+
+  // Persist and fan out the exact same bounded union. This keeps the database,
+  // queues and checkpoint coherent even when LinkFinder changes between tries.
+  await operations.persistEndpoints(jsId, recoveryCandidates);
+  await operations.fanOut(jsId, recoveryCandidates);
+  await operations.markComplete(jsId);
+
+  return { found: foundEndpoints.length, accepted: candidates.length };
+}
+
+export function buildScopedFanOutJobs(
+  scanAssets: Array<{ id: number; domain: string }>,
+  techAssets: Array<{ id: number; domain: string }>,
+  scopedHosts: ReadonlyMap<string, string>
+) {
+  return {
+    scanJobs: scanAssets.map((asset) => ({
+      name: "scan_http" as const,
+      data: { domain: asset.domain, assetId: asset.id },
+      opts: {
+        ...DEFAULT_JOB_OPTIONS,
+        jobId: `endpoint-scan-${asset.id}`,
+      },
+    })),
+    techJobs: techAssets.map((asset) => ({
+      name: "detect_technology" as const,
+      data: { url: scopedHosts.get(asset.domain)!, assetId: asset.id },
+      opts: {
+        ...DEFAULT_JOB_OPTIONS,
+        jobId: `endpoint-tech-${asset.id}`,
+      },
+    })),
+  };
 }
 
 async function fanOutScopedHosts(
@@ -140,11 +251,24 @@ async function fanOutScopedHosts(
   candidates: EndpointCandidate[],
   context: ParentScopeContext | null,
   scanQueue: Queue<ScanHttpJob>,
-  detectTechQueue: Queue<DetectTechnologyJob>
+  detectTechQueue: Queue<DetectTechnologyJob>,
+  limits: EndpointFanoutLimits
 ): Promise<void> {
   // Unscoped historical assets may still have analyze_js jobs in Redis. Keep
   // their endpoint index, but never let them fan out more global assets.
   if (!context) return;
+
+  const [currentScope] = await db
+    .select({ asset: scopes.asset, inScope: scopes.inScope })
+    .from(scopes)
+    .where(eq(scopes.id, context.scopeId))
+    .limit(1);
+  if (
+    !currentScope?.inScope ||
+    normalizeAssetDomain(currentScope.asset) !== context.rootDomain
+  ) {
+    throw new Error(`Scope ${context.scopeId} became inactive or changed during JS analysis`);
+  }
 
   const scopedHosts = new Map<string, string>();
   for (const candidate of candidates) {
@@ -162,57 +286,92 @@ async function fanOutScopedHosts(
   const discovered = await db
     .insert(assets)
     .values(
-      [...scopedHosts.keys()].map((domain) => ({
+      [...scopedHosts].map(([domain, techUrl]) => ({
         scopeId: context.scopeId,
         domain,
         source: "js",
         depth: context.nextDepth,
+        endpointFanoutManagedAt: new Date(),
+        endpointTechUrl: techUrl,
       }))
     )
     .onConflictDoUpdate({
       target: assets.domain,
       set: {
         scopeId: sql`coalesce(${assets.scopeId}, ${context.scopeId})`,
+        endpointFanoutManagedAt: sql`coalesce(
+          ${assets.endpointFanoutManagedAt},
+          case
+            when ${assets.endpointScanEnqueuedAt} is null
+              or ${assets.endpointTechEnqueuedAt} is null
+            then excluded.endpoint_fanout_managed_at
+          end
+        )`,
+        endpointTechUrl: sql`coalesce(${assets.endpointTechUrl}, excluded.endpoint_tech_url)`,
         lastSeen: new Date(),
       },
     })
     .returning({
       id: assets.id,
       domain: assets.domain,
-      isNew: sql<boolean>`(xmax = 0)`,
+      scanEnqueuedAt: assets.endpointScanEnqueuedAt,
+      techEnqueuedAt: assets.endpointTechEnqueuedAt,
     });
 
-  const newAssets = discovered.filter((asset) => asset.isNew);
-  if (newAssets.length === 0) return;
+  // The migration checkpoints historical assets. New endpoint-discovered rows
+  // remain NULL until their respective queue accepted the job, so retries can
+  // resume either side independently without a job per (JS, asset) pair.
+  if (discovered.length === 0) return;
 
-  await scanQueue.addBulk(
-    newAssets.map((asset) => ({
-      name: "scan_http",
-      data: { domain: asset.domain, assetId: asset.id },
-      opts: {
-        ...DEFAULT_JOB_OPTIONS,
-        jobId: `endpoint-${jsId}-scan-${asset.id}`,
-      },
-    }))
+  const pendingScan = discovered.filter((asset) => asset.scanEnqueuedAt === null);
+  const pendingTech = discovered.filter((asset) => asset.techEnqueuedAt === null);
+  const [scanWaiting, scanActive, scanDelayed, techWaiting, techActive, techDelayed] =
+    await Promise.all([
+      scanQueue.getWaitingCount(),
+      scanQueue.getActiveCount(),
+      scanQueue.getDelayedCount(),
+      detectTechQueue.getWaitingCount(),
+      detectTechQueue.getActiveCount(),
+      detectTechQueue.getDelayedCount(),
+    ]);
+  const scanHeadroom = Math.max(
+    0,
+    limits.maxScanQueueDepth - scanWaiting - scanActive - scanDelayed
+  );
+  const techHeadroom = Math.max(
+    0,
+    limits.maxTechQueueDepth - techWaiting - techActive - techDelayed
+  );
+  const readyScan = pendingScan.slice(0, scanHeadroom);
+  const readyTech = pendingTech.slice(0, techHeadroom);
+  const { scanJobs, techJobs } = buildScopedFanOutJobs(
+    readyScan,
+    readyTech,
+    scopedHosts
   );
 
-  await detectTechQueue.addBulk(
-    newAssets.map((asset) => ({
-      name: "detect_technology",
-      data: { url: scopedHosts.get(asset.domain)!, assetId: asset.id },
-      opts: {
-        ...DEFAULT_JOB_OPTIONS,
-        jobId: `endpoint-${jsId}-tech-${asset.id}`,
-      },
-    }))
-  );
+  if (scanJobs.length > 0) {
+    await scanQueue.addBulk(scanJobs);
+    await db
+      .update(assets)
+      .set({ endpointScanEnqueuedAt: new Date() })
+      .where(inArray(assets.id, readyScan.map((asset) => asset.id)));
+  }
+  if (techJobs.length > 0) {
+    await detectTechQueue.addBulk(techJobs);
+    await db
+      .update(assets)
+      .set({ endpointTechEnqueuedAt: new Date() })
+      .where(inArray(assets.id, readyTech.map((asset) => asset.id)));
+  }
 }
 
 export async function processAnalyzeJs(
   job: { data: AnalyzeJsJob },
   db: Db,
   scanQueue: Queue<ScanHttpJob>,
-  detectTechQueue: Queue<DetectTechnologyJob>
+  detectTechQueue: Queue<DetectTechnologyJob>,
+  limits: EndpointFanoutLimits = UNBOUNDED_FANOUT
 ): Promise<void> {
   const { jsId } = job.data;
 
@@ -230,47 +389,53 @@ export async function processAnalyzeJs(
   // propagation was enforced. Drain them without network or database fan-out;
   // if an operator later links the asset, its NULL checkpoint remains healable.
   if (!input.parentScope) {
+    // Remember that this row has passed through the new worker. If it is later
+    // linked to a scope, it must resume the real analysis rather than being
+    // mistaken for fully processed legacy data merely because endpoints exist.
+    if (!input.endpointAnalysisStartedAt) {
+      await markEndpointAnalysisStarted(db, jsId);
+    }
     console.log(JSON.stringify({ level: "info", msg: "Skipping unscoped JS analysis", jsId }));
     return;
   }
 
-  // Lazily checkpoint historical rows that already produced endpoints before
-  // endpoint_analyzed_at existed, avoiding a mass re-analysis migration.
-  const [existingEndpoint] = await db
-    .select({ jsId: endpoints.jsId })
-    .from(endpoints)
-    .where(eq(endpoints.jsId, jsId))
-    .limit(1);
-  if (existingEndpoint) {
-    await markEndpointAnalysisComplete(db, jsId);
-    return;
+  if (!input.endpointAnalysisStartedAt) {
+    // Mark before the first side effect. Existing endpoint rows are loaded by
+    // runEndpointAnalysisAttempt and recovered; their presence is never used
+    // as proof that an older attempt completed all fan-out.
+    await markEndpointAnalysisStarted(db, jsId);
   }
 
   console.log(JSON.stringify({ level: "info", msg: `Analyzing JS ${input.jsUrl}` }));
 
-  const foundEndpoints = await runLinkfinder(input.jsUrl);
-  const candidates = sanitizeEndpointCandidates(foundEndpoints);
+  const result = await runEndpointAnalysisAttempt(jsId, input.jsUrl, {
+    findEndpoints: runLinkfinder,
+    persistEndpoints: (analysisJsId, candidates) =>
+      insertEndpointBatches(db, analysisJsId, candidates),
+    loadPersistedEndpoints: (analysisJsId) =>
+      loadPersistedEndpointValues(db, analysisJsId),
+    fanOut: (analysisJsId, candidates) =>
+      fanOutScopedHosts(
+        db,
+        analysisJsId,
+        candidates,
+        input.parentScope,
+        scanQueue,
+        detectTechQueue,
+        limits
+      ),
+    markComplete: (analysisJsId) => markEndpointAnalysisComplete(db, analysisJsId),
+  });
 
-  if (candidates.length < foundEndpoints.length) {
+  if (result.accepted < result.found) {
     console.log(
       JSON.stringify({
         level: "info",
         msg: "Endpoint output bounded before persistence",
         jsId,
-        found: foundEndpoints.length,
-        accepted: candidates.length,
+        found: result.found,
+        accepted: result.accepted,
       })
     );
   }
-
-  await insertEndpointBatches(db, jsId, candidates);
-  await fanOutScopedHosts(
-    db,
-    jsId,
-    candidates,
-    input.parentScope,
-    scanQueue,
-    detectTechQueue
-  );
-  await markEndpointAnalysisComplete(db, jsId);
 }

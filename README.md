@@ -314,6 +314,8 @@ Everything added this way flows through the same workers as public scopes, so it
 | `PDCP_API_KEY`            | _(optional)_                                 | ProjectDiscovery Cloud API key for enhanced enumeration |
 | `CRTSH_ENABLED`           | `true`                                       | Use crt.sh as an enumeration source                     |
 | `GAU_ENABLED`             | `true`                                       | Use gau (historical URLs) as an enumeration source      |
+| `CRTSH_TIMEOUT_MS`        | `30000`                                      | Total deadline for one crt.sh request                    |
+| `PDCP_TIMEOUT_MS`         | `60000`                                      | Total deadline for one paginated PDCP lookup            |
 | `MAX_RECURSION_DEPTH`     | `2`                                          | How deep to recurse on JS-discovered subdomains         |
 | `STORE_JS_BLOBS`          | `true`                                       | Download and store JS bodies in MinIO                   |
 | `S3_ENDPOINT`             | `minio:9000`                                 | MinIO/S3 endpoint (`host:port`)                         |

@@ -28,6 +28,7 @@ export async function processDetectTechnology(
   console.log(JSON.stringify({ level: "info", msg: `Detecting technologies for ${url}` }));
 
   const detected = await detectTechnologies(cultivateApiUrl, url, confidenceThreshold);
+  const failures: string[] = [];
 
   for (const tech of detected) {
     try {
@@ -51,9 +52,24 @@ export async function processDetectTechnology(
           .onConflictDoNothing();
       }
     } catch (err) {
+      failures.push(`${tech.name}: ${String(err)}`);
       console.error(
         JSON.stringify({ level: "warn", msg: `Failed to upsert tech ${tech.name}`, error: String(err) })
       );
     }
   }
+
+  if (failures.length > 0) {
+    throw new Error(
+      `Failed to persist ${failures.length}/${detected.length} detected technology result(s)`
+    );
+  }
+
+  // A successful empty detection is still a completed attempt. The scheduler
+  // uses this durable success checkpoint to distinguish it from an exhausted
+  // or interrupted endpoint fan-out job.
+  await db
+    .update(assets)
+    .set({ lastTechnologyScannedAt: new Date() })
+    .where(eq(assets.id, assetId));
 }

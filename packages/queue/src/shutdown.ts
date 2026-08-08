@@ -2,6 +2,21 @@ export interface CloseableResource {
   close(): Promise<unknown>;
 }
 
+/** Drain resources in dependency order while still attempting every close. */
+export async function closeResourcesInOrder(
+  resources: CloseableResource[],
+): Promise<unknown[]> {
+  const failures: unknown[] = [];
+  for (const resource of resources) {
+    try {
+      await resource.close();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  return failures;
+}
+
 /**
  * Drain BullMQ workers and close queue connections during container updates.
  * A bounded deadline prevents Docker from leaving a wedged process behind.
@@ -9,7 +24,7 @@ export interface CloseableResource {
 export function installGracefulShutdown(
   service: string,
   resources: CloseableResource[],
-  timeoutMs = 30_000
+  timeoutMs = 65_000
 ): void {
   let shuttingDown = false;
 
@@ -26,9 +41,11 @@ export function installGracefulShutdown(
     }, timeoutMs);
     deadline.unref();
 
-    const results = await Promise.allSettled(resources.map((resource) => resource.close()));
+    // Callers pass the BullMQ Worker first and its producer Queues after it.
+    // Close them in that order: Worker.close() drains the active processor,
+    // which may still need the producer queues to publish its final fan-out.
+    const failures = await closeResourcesInOrder(resources);
     clearTimeout(deadline);
-    const failures = results.filter((result) => result.status === "rejected");
     if (failures.length > 0) {
       console.error(
         JSON.stringify({

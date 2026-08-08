@@ -1,5 +1,5 @@
 import { Queue } from "bullmq";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import type { Db } from "@yaad/db";
 import { assets, scopes } from "@yaad/db";
 import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
@@ -15,6 +15,26 @@ export interface EnumOptions {
   maxScanQueueDepth: number;
 }
 
+interface EnumerationScope {
+  asset: string;
+  wildcard: boolean;
+  inScope: boolean;
+}
+
+export interface EnumerationDependencies {
+  loadScope: (db: Db, scopeId: number) => Promise<EnumerationScope | null>;
+  runSubfinder: typeof runSubfinder;
+  getCrtSh: typeof getCrtSh;
+  runGau: typeof runGau;
+  resolveHosts: typeof resolveHosts;
+  getSubdomainsFromPDCP: typeof getSubdomainsFromPDCP;
+}
+
+const HOSTNAME_PATTERN =
+  /^([a-z0-9_][a-z0-9_-]{0,62})(\.[a-z0-9_][a-z0-9_-]{0,62})*\.?$/i;
+const WILDCARD_HOSTNAME_PATTERN =
+  /^\*\.([a-z0-9_][a-z0-9_-]{0,62})(\.[a-z0-9_][a-z0-9_-]{0,62})*\.?$/i;
+
 function normalizeHost(raw: string): string | null {
   let host = raw.trim().toLowerCase();
   try {
@@ -25,7 +45,7 @@ function normalizeHost(raw: string): string | null {
     /* ignore */
   }
   host = host.replace(/\.$/, "");
-  return host || null;
+  return HOSTNAME_PATTERN.test(host) ? host : null;
 }
 
 function isWithinDomain(host: string, rootDomain: string): boolean {
@@ -40,18 +60,78 @@ function chunks<T>(items: T[], size: number): T[][] {
   return result;
 }
 
+function activeWildcardRoot(scope: EnumerationScope | null): string | null {
+  if (!scope?.inScope || !scope.wildcard) return null;
+
+  const asset = scope.asset.trim().toLowerCase();
+  if (!WILDCARD_HOSTNAME_PATTERN.test(asset)) return null;
+  return normalizeHost(asset.slice(2));
+}
+
+async function loadScope(db: Db, scopeId: number): Promise<EnumerationScope | null> {
+  const [scope] = await db
+    .select({
+      asset: scopes.asset,
+      wildcard: scopes.wildcard,
+      inScope: scopes.inScope,
+    })
+    .from(scopes)
+    .where(eq(scopes.id, scopeId))
+    .limit(1);
+  return scope ?? null;
+}
+
+const DEFAULT_DEPENDENCIES: EnumerationDependencies = {
+  loadScope,
+  runSubfinder,
+  getCrtSh,
+  runGau,
+  resolveHosts,
+  getSubdomainsFromPDCP,
+};
+
+function logSkippedJob(reason: string, job: EnumerateSubdomainsJob): void {
+  console.warn(
+    JSON.stringify({
+      level: "warn",
+      msg: "Skipping stale or invalid enumeration job",
+      reason,
+      domain: job.domain,
+      scopeId: job.scopeId,
+      depth: job.depth ?? 0,
+    })
+  );
+}
+
 export async function processEnumerateSubdomains(
   job: { data: EnumerateSubdomainsJob },
   db: Db,
   scanQueue: Queue<ScanHttpJob>,
-  opts: EnumOptions
+  opts: EnumOptions,
+  deps: EnumerationDependencies = DEFAULT_DEPENDENCIES
 ): Promise<void> {
   const { domain, scopeId } = job.data;
   const depth = job.data.depth ?? 0;
-  const rootDomain = normalizeHost(domain);
-  if (!rootDomain) throw new Error(`Invalid enumeration domain: ${domain}`);
 
-  console.log(JSON.stringify({ level: "info", msg: `Enumerating subdomains for ${domain}` }));
+  if (scopeId === null || !Number.isSafeInteger(scopeId) || scopeId <= 0) {
+    logSkippedJob("missing or invalid scopeId", job.data);
+    return;
+  }
+
+  const scope = await deps.loadScope(db, scopeId);
+  const scopeRoot = activeWildcardRoot(scope);
+  if (!scopeRoot) {
+    logSkippedJob("scope does not exist or is not an active valid wildcard", job.data);
+    return;
+  }
+
+  const rootDomain = normalizeHost(domain);
+  if (!rootDomain || !isWithinDomain(rootDomain, scopeRoot)) {
+    logSkippedJob("domain is invalid or outside its scope", job.data);
+    return;
+  }
+
+  console.log(JSON.stringify({ level: "info", msg: `Enumerating subdomains for ${rootDomain}` }));
 
   // Fan out to every source, tracking provenance (first source to report a host wins).
   const sourceOf = new Map<string, string>();
@@ -62,19 +142,27 @@ export async function processEnumerateSubdomains(
   };
 
   const tasks: Array<Promise<void>> = [
-    runSubfinder(domain, opts.subfinderDeep).then((hs) =>
+    deps.runSubfinder(rootDomain, opts.subfinderDeep).then((hs) =>
       hs.forEach((h) => record(normalizeHost(h), "subfinder"))
     ),
   ];
   if (opts.crtShEnabled) {
-    tasks.push(getCrtSh(domain).then((hs) => hs.forEach((h) => record(normalizeHost(h), "crtsh"))));
+    tasks.push(
+      deps.getCrtSh(rootDomain).then((hs) =>
+        hs.forEach((h) => record(normalizeHost(h), "crtsh"))
+      )
+    );
   }
   if (opts.gauEnabled) {
-    tasks.push(runGau(domain).then((hs) => hs.forEach((h) => record(normalizeHost(h), "gau"))));
+    tasks.push(
+      deps.runGau(rootDomain).then((hs) =>
+        hs.forEach((h) => record(normalizeHost(h), "gau"))
+      )
+    );
   }
   if (opts.pdcpApiKey) {
     tasks.push(
-      getSubdomainsFromPDCP(domain, opts.pdcpApiKey).then((hs) =>
+      deps.getSubdomainsFromPDCP(rootDomain, opts.pdcpApiKey).then((hs) =>
         hs.forEach((h) => record(normalizeHost(h), "pdcp"))
       )
     );
@@ -87,7 +175,7 @@ export async function processEnumerateSubdomains(
   // happened to respond.
   if (sourceResults[0]?.status === "rejected") {
     throw new Error(
-      `Primary enumeration failed for ${domain}: ${sourceFailures
+      `Primary enumeration failed for ${rootDomain}: ${sourceFailures
         .map((result) => String((result as PromiseRejectedResult).reason))
         .join("; ")}`
     );
@@ -96,7 +184,7 @@ export async function processEnumerateSubdomains(
     console.warn(
       JSON.stringify({
         level: "warn",
-        msg: `Some enumeration sources failed for ${domain}`,
+        msg: `Some enumeration sources failed for ${rootDomain}`,
         failures: sourceFailures.map((result) =>
           String((result as PromiseRejectedResult).reason)
         ),
@@ -109,16 +197,24 @@ export async function processEnumerateSubdomains(
 
   const allHosts = [...sourceOf.keys()];
   console.log(
-    JSON.stringify({ level: "info", msg: `Found ${allHosts.length} candidate hosts for ${domain}` })
+    JSON.stringify({ level: "info", msg: `Found ${allHosts.length} candidate hosts for ${rootDomain}` })
   );
 
   // Resolve to drop dead subdomains and capture IPs.
-  const resolutions = await resolveHosts(allHosts);
+  const resolutions = await deps.resolveHosts(allHosts);
   const ipOf = new Map(resolutions.map((r) => [r.host, r.ip]));
 
   console.log(
-    JSON.stringify({ level: "info", msg: `${resolutions.length}/${allHosts.length} resolved for ${domain}` })
+    JSON.stringify({ level: "info", msg: `${resolutions.length}/${allHosts.length} resolved for ${rootDomain}` })
   );
+
+  // Enumeration can take minutes. Re-check the scope immediately before any
+  // DB/queue fanout so a scope disabled while tools were running stays clean.
+  const currentScopeRoot = activeWildcardRoot(await deps.loadScope(db, scopeId));
+  if (currentScopeRoot !== scopeRoot || !isWithinDomain(rootDomain, currentScopeRoot)) {
+    logSkippedJob("scope became inactive or changed during enumeration", job.data);
+    return;
+  }
 
   const [waitingScans, activeScans, delayedScans] = await Promise.all([
     scanQueue.getWaitingCount(),
@@ -176,10 +272,14 @@ export async function processEnumerateSubdomains(
     }
   }
 
-  if (scopeId !== null) {
-    await db
-      .update(scopes)
-      .set({ lastEnumeratedAt: new Date() })
-      .where(eq(scopes.id, scopeId));
-  }
+  await db
+    .update(scopes)
+    .set({ lastEnumeratedAt: new Date() })
+    .where(
+      and(
+        eq(scopes.id, scopeId),
+        eq(scopes.inScope, true),
+        eq(scopes.wildcard, true)
+      )
+    );
 }
