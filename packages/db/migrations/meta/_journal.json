@@ -71,6 +71,13 @@
       "when": 1786190400000,
       "tag": "0009_endpoint_recovery",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1786191383790,
+      "tag": "0010_repair_scope_relink",
+      "breakpoints": true
     }
   ]
 }

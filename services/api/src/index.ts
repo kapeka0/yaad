@@ -2,8 +2,13 @@ import { serve } from "@hono/node-server";
 import { Hono } from "hono";
 import { loadConfig } from "@yaad/config";
 import { getDb, runMigrations } from "@yaad/db";
-import { BlobStore, type Compression } from "@yaad/storage";
-import { sql, eq, ilike, count, gt, and, inArray, isNotNull, desc, type SQL } from "drizzle-orm";
+import { BlobStore } from "@yaad/storage";
+import { eq, ilike, count, gt, and, inArray, isNotNull, type SQL } from "drizzle-orm";
+import {
+  DrizzleGrepRepository,
+  JsGrepError,
+  JsGrepService,
+} from "./js-grep.js";
 import {
   programs,
   scopes,
@@ -13,7 +18,6 @@ import {
   webServices,
   javascriptFiles,
   jsLibraries,
-  jsBlobs,
 } from "@yaad/db";
 
 const config = loadConfig();
@@ -24,6 +28,11 @@ function parsePagination(page: string | undefined, limit: string | undefined) {
   return { page: p, limit: l, offset: (p - 1) * l };
 }
 
+function positiveEnv(name: string, fallback: number): number {
+  const parsed = Number.parseInt(process.env[name] ?? "", 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 async function bootstrap() {
   console.log(JSON.stringify({ level: "info", msg: "Running migrations..." }));
   await runMigrations(config.databaseUrl);
@@ -31,6 +40,17 @@ async function bootstrap() {
 
   const db = getDb(config.databaseUrl);
   const app = new Hono();
+  const jsGrep = new JsGrepService(
+    new DrizzleGrepRepository(db),
+    new BlobStore(config.storage),
+    {
+      cacheTtlMs: positiveEnv("JS_GREP_CACHE_TTL_MS", 30 * 60 * 1000),
+      maxSessions: positiveEnv("JS_GREP_MAX_SESSIONS", 4),
+      scanConcurrency: positiveEnv("JS_GREP_SCAN_CONCURRENCY", 4),
+      snippetLength: positiveEnv("JS_GREP_SNIPPET_LENGTH", 500),
+      blobReadTimeoutMs: positiveEnv("JS_GREP_BLOB_READ_TIMEOUT_MS", 30_000),
+    }
+  );
 
   // Health check
   app.get("/health", (c) => c.json({ status: "ok" }));
@@ -371,70 +391,33 @@ async function bootstrap() {
     return c.json(rows);
   });
 
-  // GET /js/grep?q=<regex>&limit=N — scan stored JS bodies for an arbitrary
-  // signature. Slower than the structured library search; meant for ad-hoc hunts.
+  // GET /js/grep starts/coalesces a full-corpus hunt. Poll its searchId while
+  // status=scanning, then use nextCursor for stable, unbounded pagination.
   app.get("/js/grep", async (c) => {
     const q = c.req.query("q");
     if (!q) return c.json({ error: "q (pattern) is required" }, 400);
-    let re: RegExp;
+    const rawLimit = c.req.query("limit");
+    const parsedLimit = rawLimit === undefined ? undefined : Number.parseInt(rawLimit, 10);
     try {
-      re = new RegExp(q, "i");
-    } catch {
-      return c.json({ error: "invalid regex" }, 400);
+      const response = await jsGrep.search({
+        pattern: q,
+        searchId: c.req.query("searchId"),
+        cursor: c.req.query("cursor"),
+        limit: parsedLimit,
+      });
+      if (response.statusCode === 202) return c.json(response.body, 202);
+      if (response.statusCode === 503) return c.json(response.body, 503);
+      return c.json(response.body, 200);
+    } catch (error) {
+      if (error instanceof JsGrepError) {
+        if (error.status === 410) return c.json({ error: error.message }, 410);
+        if (error.status === 429) return c.json({ error: error.message }, 429);
+        if (error.status === 503) return c.json({ error: error.message }, 503);
+        return c.json({ error: error.message }, 400);
+      }
+      console.error(JSON.stringify({ level: "error", route: "/js/grep", error: String(error) }));
+      return c.json({ error: "grep request failed" }, 503);
     }
-    const limit = Math.min(2000, Math.max(1, parseInt(c.req.query("limit") ?? "300", 10)));
-
-    // Scan the most widely-referenced unique blobs first.
-    const blobs = await db
-      .select({
-        sha256: jsBlobs.sha256,
-        storageKey: jsBlobs.storageKey,
-        compression: jsBlobs.compression,
-      })
-      .from(jsBlobs)
-      .orderBy(desc(jsBlobs.refCount))
-      .limit(limit);
-
-    const store = new BlobStore(config.storage);
-    const matched: string[] = [];
-
-    // Bounded parallelism to keep memory/network sane.
-    const pool = 8;
-    for (let i = 0; i < blobs.length; i += pool) {
-      const slice = blobs.slice(i, i + pool);
-      const checks = await Promise.all(
-        slice.map(async (b) => {
-          try {
-            const buf = await store.get(b.storageKey, b.compression as Compression);
-            return re.test(buf.toString("utf-8")) ? b.sha256 : null;
-          } catch {
-            return null;
-          }
-        })
-      );
-      for (const m of checks) if (m) matched.push(m);
-    }
-
-    if (matched.length === 0) {
-      return c.json({ scanned: blobs.length, matches: [] });
-    }
-
-    // Map matching blobs back to the assets/JS files that serve them.
-    const hits = await db
-      .selectDistinct({
-        sha256: javascriptFiles.sha256,
-        jsUrl: javascriptFiles.url,
-        domain: assets.domain,
-        programName: programs.name,
-      })
-      .from(javascriptFiles)
-      .innerJoin(webServices, eq(webServices.id, javascriptFiles.serviceId))
-      .innerJoin(assets, eq(assets.id, webServices.assetId))
-      .leftJoin(scopes, eq(scopes.id, assets.scopeId))
-      .leftJoin(programs, eq(programs.id, scopes.programId))
-      .where(inArray(javascriptFiles.sha256, matched));
-
-    return c.json({ scanned: blobs.length, matchedBlobs: matched.length, matches: hits });
   });
 
   serve({ fetch: app.fetch, port: config.port }, () => {

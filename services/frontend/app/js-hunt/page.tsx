@@ -4,19 +4,7 @@ import { useState, useEffect } from "react";
 import Image from "next/image";
 import { Search, Loader2, ShieldAlert, ArrowRight, ExternalLink } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-interface GrepMatch {
-  sha256: string;
-  jsUrl: string;
-  domain: string;
-  programName: string;
-}
-
-interface GrepResponse {
-  scanned: number;
-  matchedBlobs: number;
-  matches: GrepMatch[];
-}
+import { JsGrepSearch } from "@/components/js-grep-search";
 
 interface VulnerableLib {
   name: string;
@@ -54,19 +42,11 @@ function EmptyState({ text }: { text: string }) {
   );
 }
 
-const GREP_HINT = "Grep stored JS bundles for a signature and see which hosts serve it.";
 const VULN_HINT = "Libraries with known CVEs appear here once detected.";
 const LIB_HINT = "Search libraries and versions detected across scanned assets.";
 
 export default function JsHuntPage() {
   const [activeTab, setActiveTab] = useState<"grep" | "vulnerable" | "libraries">("grep");
-
-  // State for Grep
-  const [grepQuery, setGrepQuery] = useState("");
-  const [grepLimit, setGrepLimit] = useState(300);
-  const [grepResults, setGrepResults] = useState<GrepResponse | null>(null);
-  const [isGrepping, setIsGrepping] = useState(false);
-  const [grepError, setGrepError] = useState("");
 
   // State for Vulnerable Libs
   const [vulnerableLibs, setVulnerableLibs] = useState<VulnerableLib[]>([]);
@@ -89,30 +69,6 @@ export default function JsHuntPage() {
       fetchVulnerable();
     }
   }, [activeTab]);
-
-  async function handleGrepSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    if (!grepQuery.trim()) return;
-
-    setIsGrepping(true);
-    setGrepError("");
-    setGrepResults(null);
-
-    try {
-      const res = await fetch(`/api/js/grep?q=${encodeURIComponent(grepQuery)}&limit=${grepLimit}`);
-      if (!res.ok) {
-        const data = await res.json();
-        throw new Error(data.error || "Grep request failed");
-      }
-      const data = await res.json();
-      setGrepResults(data);
-    } catch (err: unknown) {
-      const errMsg = err instanceof Error ? err.message : String(err);
-      setGrepError(errMsg);
-    } finally {
-      setIsGrepping(false);
-    }
-  }
 
   async function fetchVulnerable() {
     setIsLoadingVulnerable(true);
@@ -226,110 +182,7 @@ export default function JsHuntPage() {
 
       {/* Tab Contents */}
       <div className="pt-2">
-        {activeTab === "grep" && (
-          <div className="space-y-4">
-            <div className="bg-muted/30 border border-border rounded-md p-3 text-xs font-mono">
-              <p className="text-muted-foreground mb-2">
-                Scan stored JS files for a signature or API key pattern.
-              </p>
-              <form onSubmit={handleGrepSubmit} className="flex flex-col sm:flex-row gap-2">
-                <div className="relative flex-1">
-                  <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-muted-foreground" />
-                  <input
-                    type="text"
-                    required
-                    placeholder="Regex (e.g. firebaseio\.com or AIza[0-9A-Za-z_-]{35})"
-                    value={grepQuery}
-                    onChange={(e) => setGrepQuery(e.target.value)}
-                    className={cn(
-                      "w-full pl-8 pr-3 py-1.5 text-xs rounded-md border border-border bg-background",
-                      "placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring font-mono"
-                    )}
-                  />
-                </div>
-                <div className="flex gap-2">
-                  <input
-                    type="number"
-                    min="1"
-                    max="2000"
-                    title="Max unique blobs to check (most referenced first)"
-                    value={grepLimit}
-                    onChange={(e) => setGrepLimit(parseInt(e.target.value, 10))}
-                    className="w-20 px-2 py-1.5 text-xs rounded-md border border-border bg-background font-mono focus:outline-none focus:ring-1 focus:ring-ring"
-                  />
-                  <button
-                    type="submit"
-                    disabled={isGrepping}
-                    className="flex items-center gap-1.5 px-4 py-1.5 text-xs font-mono font-medium rounded-md bg-foreground text-background hover:bg-foreground/90 disabled:opacity-50 transition-colors"
-                  >
-                    {isGrepping && <Loader2 className="w-3 h-3 animate-spin" />}
-                    Grep Chunks
-                  </button>
-                </div>
-              </form>
-            </div>
-
-            {!isGrepping && !grepResults && !grepError && <EmptyState text={GREP_HINT} />}
-
-            {grepError && (
-              <div className="border border-destructive/30 bg-destructive/10 text-destructive text-xs font-mono p-3 rounded-md">
-                Error: {grepError}
-              </div>
-            )}
-
-            {isGrepping && (
-              <div className="flex items-center justify-center py-12 text-xs text-muted-foreground font-mono gap-2">
-                <Loader2 className="w-4 h-4 animate-spin text-primary" />
-                Grepping blobs...
-              </div>
-            )}
-
-            {grepResults && (
-              <div className="space-y-2">
-                <div className="text-xs text-muted-foreground font-mono">
-                  Scanned {grepResults.scanned} unique blobs. Found {grepResults.matchedBlobs} matches across {grepResults.matches.length} hosts.
-                </div>
-                <div className="border border-border rounded-md overflow-x-auto">
-                  <table className="w-full text-xs font-mono">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/40 text-[10px] text-muted-foreground uppercase tracking-wider">
-                        <th className="text-left px-3 py-2">Subdomain</th>
-                        <th className="text-left px-3 py-2">Program</th>
-                        <th className="text-left px-3 py-2">Javascript File</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {grepResults.matches.length === 0 ? (
-                        <tr>
-                          <td colSpan={3} className="px-3 py-8 text-center text-muted-foreground">
-                            No signatures matched the pattern.
-                          </td>
-                        </tr>
-                      ) : (
-                        grepResults.matches.map((match, i) => (
-                          <tr key={i} className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors">
-                            <td className="px-3 py-2 text-foreground whitespace-nowrap">{match.domain}</td>
-                            <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">{match.programName}</td>
-                            <td className="px-3 py-2 text-muted-foreground whitespace-nowrap">
-                              <a
-                                href={match.jsUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-1 hover:text-foreground hover:underline"
-                              >
-                                {match.jsUrl} <ExternalLink className="w-2.5 h-2.5 shrink-0" />
-                              </a>
-                            </td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
+        {activeTab === "grep" && <JsGrepSearch />}
 
         {activeTab === "vulnerable" && (
           <div className="space-y-4">

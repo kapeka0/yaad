@@ -116,13 +116,28 @@ export class BlobStore {
     }
   }
 
-  async get(storageKey: string, compression: Compression): Promise<Buffer> {
+  async get(
+    storageKey: string,
+    compression: Compression,
+    signal?: AbortSignal
+  ): Promise<Buffer> {
     await this.ensureBucket();
+    signal?.throwIfAborted();
     const stream = await this.client.getObject(this.bucket, storageKey);
-    const chunks: Buffer[] = [];
-    for await (const chunk of stream) {
-      chunks.push(chunk as Buffer);
+    if (signal?.aborted) {
+      stream.destroy();
+      signal.throwIfAborted();
     }
-    return decompress(Buffer.concat(chunks), compression);
+    const abortRead = () => stream.destroy(new Error("Blob read aborted"));
+    signal?.addEventListener("abort", abortRead, { once: true });
+    const chunks: Buffer[] = [];
+    try {
+      for await (const chunk of stream) {
+        chunks.push(chunk as Buffer);
+      }
+      return decompress(Buffer.concat(chunks), compression);
+    } finally {
+      signal?.removeEventListener("abort", abortRead);
+    }
   }
 }

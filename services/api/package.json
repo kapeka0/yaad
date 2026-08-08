@@ -5,6 +5,7 @@
   "main": "./dist/index.js",
   "scripts": {
     "build": "tsc --build --force tsconfig.json",
+    "test": "tsx --test test/*.test.ts",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts"
   },
@@ -14,7 +15,8 @@
     "@yaad/db": "workspace:*",
     "@yaad/storage": "workspace:*",
     "drizzle-orm": "^0.30.10",
-    "hono": "^4.3.9"
+    "hono": "^4.3.9",
+    "re2": "1.26.1"
   },
   "devDependencies": {
     "tsx": "^4.7.3",
