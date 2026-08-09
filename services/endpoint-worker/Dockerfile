@@ -1,4 +1,5 @@
-FROM node:20-alpine AS base
+# Node 22 is required to decompress zstd-backed content-addressed JS blobs.
+FROM node:22-alpine AS base
 
 # Install Python 3 and linkfinder
 RUN apk add --no-cache python3 py3-pip git

@@ -1,9 +1,14 @@
 import { Queue } from "bullmq";
 import { and, or, eq, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import type { Db } from "@yaad/db";
-import { scopes, assets } from "@yaad/db";
+import { assets, javascriptFiles, jsBlobs, scopes } from "@yaad/db";
 import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
-import type { DetectTechnologyJob, EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
+import type {
+  AnalyzeJsJob,
+  DetectTechnologyJob,
+  EnumerateSubdomainsJob,
+  ScanHttpJob,
+} from "@yaad/queue";
 import type { SchedulerSettings } from "@yaad/config";
 
 const HOSTNAME_PATTERN =
@@ -190,6 +195,116 @@ export interface EndpointFanoutRecoveryResult {
   technologies: number;
 }
 
+export function buildEndpointAnalysisJobs(
+  rows: Array<{ id: number; url: string }>,
+  bucket: number
+) {
+  return rows.map((row) => ({
+    name: "analyze_js" as const,
+    data: { jsId: row.id, jsUrl: row.url },
+    opts: {
+      ...DEFAULT_JOB_OPTIONS,
+      jobId: `scheduler-analyze-js-${row.id}-${bucket}`,
+    },
+  }));
+}
+
+/**
+ * Rebuild the content-addressed endpoint index and recover occurrence fan-out.
+ * Pending blobs are represented once per batch; completed shared blobs may
+ * fan out through every remaining scoped occurrence without rerunning tools.
+ */
+export async function refreshPendingEndpointAnalyses(
+  db: Db,
+  analyzeQueue: Queue<AnalyzeJsJob>,
+  settings: SchedulerSettings
+): Promise<number> {
+  const depth = await getQueueDepth(analyzeQueue);
+  const available = Math.max(0, settings.maxAnalyzeQueueDepth - depth);
+  const limit = Math.min(settings.batchSize, available);
+  if (limit === 0) {
+    log("info", "Endpoint analysis scheduler paused by backpressure", {
+      queueDepth: depth,
+      maxQueueDepth: settings.maxAnalyzeQueueDepth,
+    });
+    return 0;
+  }
+
+  const retryBefore = sql`now() - ${`${settings.retryIntervalHours} hours`}::interval`;
+  const candidates = await db
+    .select({
+      id: javascriptFiles.id,
+      url: javascriptFiles.url,
+      sha256: javascriptFiles.sha256,
+      blobAnalyzedAt: jsBlobs.endpointAnalyzedAt,
+    })
+    .from(javascriptFiles)
+    .innerJoin(jsBlobs, eq(javascriptFiles.sha256, jsBlobs.sha256))
+    .where(
+      and(
+        isNotNull(javascriptFiles.fetchedAt),
+        isNull(javascriptFiles.endpointAnalyzedAt),
+        or(
+          isNull(javascriptFiles.endpointAnalysisStartedAt),
+          lt(javascriptFiles.endpointAnalysisStartedAt, retryBefore)
+        )
+      )
+    )
+    .orderBy(sql`${javascriptFiles.endpointAnalysisStartedAt} asc nulls first`, javascriptFiles.id)
+    .limit(Math.min(5_000, Math.max(limit, limit * 4)));
+
+  const selected: Array<{
+    id: number;
+    url: string;
+    sha256: string;
+    blobAnalyzedAt: Date | null;
+  }> = [];
+  const pendingHashes = new Set<string>();
+  for (const row of candidates) {
+    if (!row.sha256) continue;
+    if (!row.blobAnalyzedAt && pendingHashes.has(row.sha256)) continue;
+    if (!row.blobAnalyzedAt) pendingHashes.add(row.sha256);
+    selected.push({ ...row, sha256: row.sha256 });
+    if (selected.length >= limit) break;
+  }
+  if (selected.length === 0) return 0;
+
+  const attemptedAt = new Date();
+  const bucket = retryBucket(attemptedAt, settings.retryIntervalHours);
+  await analyzeQueue.addBulk(buildEndpointAnalysisJobs(selected, bucket));
+
+  const pendingBlobHashes = [...new Set(
+    selected.filter((row) => !row.blobAnalyzedAt).map((row) => row.sha256)
+  )];
+  const completedBlobOccurrenceIds = selected
+    .filter((row) => row.blobAnalyzedAt)
+    .map((row) => row.id);
+  if (pendingBlobHashes.length > 0) {
+    await db
+      .update(javascriptFiles)
+      .set({ endpointAnalysisStartedAt: attemptedAt })
+      .where(
+        and(
+          inArray(javascriptFiles.sha256, pendingBlobHashes),
+          isNull(javascriptFiles.endpointAnalyzedAt)
+        )
+      );
+  }
+  if (completedBlobOccurrenceIds.length > 0) {
+    await db
+      .update(javascriptFiles)
+      .set({ endpointAnalysisStartedAt: attemptedAt })
+      .where(inArray(javascriptFiles.id, completedBlobOccurrenceIds));
+  }
+
+  log("info", "Queued pending endpoint analyses", {
+    occurrences: selected.length,
+    uniquePendingBlobs: pendingBlobHashes.length,
+    queueDepthBefore: depth,
+  });
+  return selected.length;
+}
+
 export function buildEndpointRecoveryJobs(
   scanRows: Array<{ id: number; domain: string }>,
   techRows: Array<{ id: number; url: string }>,
@@ -319,18 +434,21 @@ export async function runTick(
   db: Db,
   enumerateQueue: Queue<EnumerateSubdomainsJob>,
   scanQueue: Queue<ScanHttpJob>,
+  analyzeQueue: Queue<AnalyzeJsJob>,
   detectTechQueue: Queue<DetectTechnologyJob>,
   settings: SchedulerSettings,
   downstreamQueues: QueuePressureSource[] = []
 ): Promise<void> {
-  const [enumCount, endpointRecovery] = await Promise.all([
+  const [enumCount, endpointRecovery, endpointAnalyses] = await Promise.all([
     refreshStaleScopes(db, enumerateQueue, settings),
     refreshEndpointFanout(db, scanQueue, detectTechQueue, settings),
+    refreshPendingEndpointAnalyses(db, analyzeQueue, settings),
   ]);
   const scanCount = await refreshStaleAssets(db, scanQueue, settings, downstreamQueues);
   log("info", "Scheduler tick complete", {
     scopesReEnumerated: enumCount,
     assetsReScanned: scanCount,
+    endpointAnalysesQueued: endpointAnalyses,
     endpointScansRecovered: endpointRecovery.scans,
     endpointTechnologiesRecovered: endpointRecovery.technologies,
   });

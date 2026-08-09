@@ -218,6 +218,11 @@ services:
       <<: *external-tool-env
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
       REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: minio:9000
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-yaad}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-yaadyaad}
+      S3_BUCKET: ${S3_BUCKET:-js-blobs}
+      S3_USE_SSL: "false"
       WORKER_CONCURRENCY: ${ENDPOINT_WORKER_CONCURRENCY:-${WORKER_CONCURRENCY:-5}}
       LOG_LEVEL: info
       LINKFINDER_TIMEOUT_MS: ${LINKFINDER_TIMEOUT_MS:-300000}
@@ -225,6 +230,8 @@ services:
       SCHEDULER_MAX_TECH_QUEUE: ${SCHEDULER_MAX_TECH_QUEUE:-5000}
     depends_on:
       api:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
   tech-worker:

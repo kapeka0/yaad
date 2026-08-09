@@ -19,6 +19,7 @@ interface Stats {
   };
   libraries: { detected: number; vulnerable: number };
   storage: { uniqueBlobs: number; originalBytes: number; storedBytes: number; ratio: number };
+  endpointIndex: { indexedBlobs: number; totalBlobs: number };
   queues: Record<string, { waiting: number; active: number; completed: number; failed: number }>;
   lastScan: string | null;
 }
@@ -142,6 +143,10 @@ export default function StatsPage() {
               <Tile
                 label="Compression"
                 value={data.storage.ratio > 0 ? `${data.storage.ratio.toFixed(1)}×` : "—"}
+              />
+              <Tile
+                label="Endpoint-indexed blobs"
+                value={`${formatNum(data.endpointIndex.indexedBlobs)} / ${formatNum(data.endpointIndex.totalBlobs)}`}
               />
             </div>
           </Section>

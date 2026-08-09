@@ -1,17 +1,33 @@
 import { Queue } from "bullmq";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt, or, sql } from "drizzle-orm";
 import type { Db } from "@yaad/db";
-import { assets, endpoints, javascriptFiles, scopes, webServices } from "@yaad/db";
+import {
+  assets,
+  blobEndpoints,
+  javascriptFiles,
+  jsBlobs,
+  scopes,
+  webServices,
+} from "@yaad/db";
 import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
 import type { AnalyzeJsJob, ScanHttpJob, DetectTechnologyJob } from "@yaad/queue";
+import { BlobStore, type Compression } from "@yaad/storage";
 import { normalizeAssetDomain } from "@yaad/types";
 import { runLinkfinder } from "./runner.js";
 
 // Keep every value comfortably below PostgreSQL's btree index tuple limit.
 // LinkFinder occasionally emits entire inline payloads as a single endpoint.
 export const MAX_ENDPOINT_BYTES = 2_048;
-export const MAX_ENDPOINTS_PER_JS = 2_000;
-export const ENDPOINT_INSERT_BATCH_SIZE = 250;
+export const MAX_ENDPOINTS_PER_BLOB = 250;
+export const ENDPOINT_INSERT_BATCH_SIZE = 100;
+export const BLOB_ANALYSIS_CLAIM_TIMEOUT_MS = 10 * 60 * 1000;
+
+const STATIC_RESOURCE_EXTENSION =
+  /\.(?:avif|bmp|css|eot|gif|ico|jpe?g|js|mjs|map|mp3|mp4|ogg|otf|pdf|png|svg|ttf|webm|webp|woff2?)(?:[?#].*)?$/i;
+const MIME_TYPE =
+  /^(?:application|audio|font|image|message|model|multipart|text|video)\/[a-z0-9][a-z0-9.+-]*(?:\s*;.*)?$/i;
+const NON_HTTP_SCHEME = /^(?:blob|data|file|javascript|mailto|tel):/i;
+const LINKFINDER_NOISE = /^(?:usage:|options:|use -h for help)/i;
 
 interface ParentScopeContext {
   scopeId: number;
@@ -21,9 +37,13 @@ interface ParentScopeContext {
 
 interface AnalysisInput {
   jsUrl: string;
+  sha256: string | null;
+  storageKey: string | null;
+  compression: Compression | null;
   fetchedAt: Date | null;
   endpointAnalyzedAt: Date | null;
   endpointAnalysisStartedAt: Date | null;
+  blobEndpointAnalyzedAt: Date | null;
   parentScope: ParentScopeContext | null;
 }
 
@@ -33,9 +53,13 @@ export interface EndpointCandidate {
 }
 
 export interface EndpointAnalysisOperations {
-  findEndpoints: (jsUrl: string) => Promise<string[]>;
-  persistEndpoints: (jsId: number, candidates: EndpointCandidate[]) => Promise<void>;
-  loadPersistedEndpoints: (jsId: number) => Promise<string[]>;
+  claimBlobAnalysis: (sha256: string) => Promise<"claimed" | "complete" | "busy">;
+  readBlob: () => Promise<Buffer>;
+  findEndpoints: (body: Buffer) => Promise<string[]>;
+  persistEndpoints: (sha256: string, candidates: EndpointCandidate[]) => Promise<void>;
+  loadPersistedEndpoints: (sha256: string) => Promise<string[]>;
+  markBlobComplete: (sha256: string) => Promise<void>;
+  releaseBlobClaim: (sha256: string) => Promise<void>;
   fanOut: (jsId: number, candidates: EndpointCandidate[]) => Promise<void>;
   markComplete: (jsId: number) => Promise<void>;
 }
@@ -68,17 +92,58 @@ export function extractHostname(endpoint: string): string | null {
   }
 }
 
-/** Deduplicate and bound untrusted LinkFinder output before it reaches an index. */
+export function isHighSignalEndpoint(endpoint: string): boolean {
+  if (
+    !endpoint ||
+    MIME_TYPE.test(endpoint) ||
+    NON_HTTP_SCHEME.test(endpoint) ||
+    LINKFINDER_NOISE.test(endpoint) ||
+    STATIC_RESOURCE_EXTENSION.test(endpoint) ||
+    /(?:^|\/)node_modules\//i.test(endpoint) ||
+    /\/_next\/static\//i.test(endpoint)
+  ) {
+    return false;
+  }
+
+  if (/^https?:\/\//i.test(endpoint)) {
+    try {
+      const parsed = new URL(endpoint);
+      if (parsed.hostname === "w3.org" || parsed.hostname.endsWith(".w3.org")) return false;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  // LinkFinder occasionally prints banners and identifiers. Relative paths,
+  // templates and a few endpoint-like route names remain useful.
+  return (
+    endpoint.includes("/") ||
+    endpoint.includes("?") ||
+    endpoint.includes("{") ||
+    /^(?:api|auth|graphql|login|oauth)$/i.test(endpoint)
+  );
+}
+
+/** Deduplicate, filter and bound untrusted LinkFinder output before indexing. */
 export function sanitizeEndpointCandidates(foundEndpoints: string[]): EndpointCandidate[] {
   const seen = new Set<string>();
   const candidates: EndpointCandidate[] = [];
 
   for (const rawEndpoint of foundEndpoints) {
-    const endpoint = rawEndpoint.trim();
+    let endpoint = rawEndpoint.trim();
+    if (
+      endpoint.length >= 2 &&
+      ((endpoint.startsWith('"') && endpoint.endsWith('"')) ||
+        (endpoint.startsWith("'") && endpoint.endsWith("'")))
+    ) {
+      endpoint = endpoint.slice(1, -1).trim();
+    }
     if (
       !endpoint ||
       endpoint.includes("\0") ||
       Buffer.byteLength(endpoint, "utf8") > MAX_ENDPOINT_BYTES ||
+      !isHighSignalEndpoint(endpoint) ||
       seen.has(endpoint)
     ) {
       continue;
@@ -86,7 +151,7 @@ export function sanitizeEndpointCandidates(foundEndpoints: string[]): EndpointCa
 
     seen.add(endpoint);
     candidates.push({ endpoint, hostname: extractHostname(endpoint) });
-    if (candidates.length >= MAX_ENDPOINTS_PER_JS) break;
+    if (candidates.length >= MAX_ENDPOINTS_PER_BLOB) break;
   }
 
   return candidates;
@@ -96,9 +161,13 @@ async function loadAnalysisInput(db: Db, jsId: number): Promise<AnalysisInput | 
   const [row] = await db
     .select({
       jsUrl: javascriptFiles.url,
+      sha256: javascriptFiles.sha256,
       fetchedAt: javascriptFiles.fetchedAt,
       endpointAnalyzedAt: javascriptFiles.endpointAnalyzedAt,
       endpointAnalysisStartedAt: javascriptFiles.endpointAnalysisStartedAt,
+      storageKey: jsBlobs.storageKey,
+      compression: jsBlobs.compression,
+      blobEndpointAnalyzedAt: jsBlobs.endpointAnalyzedAt,
       scopeId: assets.scopeId,
       parentDepth: assets.depth,
       scopeAsset: scopes.asset,
@@ -108,6 +177,7 @@ async function loadAnalysisInput(db: Db, jsId: number): Promise<AnalysisInput | 
     .innerJoin(webServices, eq(javascriptFiles.serviceId, webServices.id))
     .innerJoin(assets, eq(webServices.assetId, assets.id))
     .leftJoin(scopes, eq(assets.scopeId, scopes.id))
+    .leftJoin(jsBlobs, eq(javascriptFiles.sha256, jsBlobs.sha256))
     .where(eq(javascriptFiles.id, jsId))
     .limit(1);
 
@@ -127,9 +197,14 @@ async function loadAnalysisInput(db: Db, jsId: number): Promise<AnalysisInput | 
 
   return {
     jsUrl: row.jsUrl,
+    sha256: row.sha256,
+    storageKey: row.storageKey,
+    compression:
+      row.compression === "zstd" || row.compression === "gzip" ? row.compression : null,
     fetchedAt: row.fetchedAt,
     endpointAnalyzedAt: row.endpointAnalyzedAt,
     endpointAnalysisStartedAt: row.endpointAnalysisStartedAt,
+    blobEndpointAnalyzedAt: row.blobEndpointAnalyzedAt,
     parentScope,
   };
 }
@@ -155,14 +230,11 @@ async function markEndpointAnalysisComplete(db: Db, jsId: number): Promise<void>
 
 async function insertEndpointBatches(
   db: Db,
-  jsId: number,
+  sha256: string,
   candidates: EndpointCandidate[]
 ): Promise<void> {
-  await persistEndpointBatches(jsId, candidates, async (batch) => {
-    await db
-      .insert(endpoints)
-      .values(batch)
-      .onConflictDoNothing();
+  await persistEndpointBatches(sha256, candidates, async (batch) => {
+    await db.insert(blobEndpoints).values(batch).onConflictDoNothing();
   });
 }
 
@@ -171,25 +243,84 @@ async function insertEndpointBatches(
  * deliberately exposed so retry behavior can be tested without PostgreSQL.
  */
 export async function persistEndpointBatches(
-  jsId: number,
+  sha256: string,
   candidates: EndpointCandidate[],
-  insertBatch: (rows: Array<{ jsId: number; endpoint: string }>) => Promise<void>
+  insertBatch: (rows: Array<{ sha256: string; endpoint: string }>) => Promise<void>
 ): Promise<void> {
   for (let offset = 0; offset < candidates.length; offset += ENDPOINT_INSERT_BATCH_SIZE) {
     const batch = candidates.slice(offset, offset + ENDPOINT_INSERT_BATCH_SIZE);
-    await insertBatch(batch.map(({ endpoint }) => ({ jsId, endpoint })));
+    await insertBatch(batch.map(({ endpoint }) => ({ sha256, endpoint })));
   }
 }
 
-async function loadPersistedEndpointValues(db: Db, jsId: number): Promise<string[]> {
+async function loadPersistedEndpointValues(db: Db, sha256: string): Promise<string[]> {
   const rows = await db
-    .select({ endpoint: endpoints.endpoint })
-    .from(endpoints)
-    .where(eq(endpoints.jsId, jsId))
-    .orderBy(endpoints.id)
-    .limit(MAX_ENDPOINTS_PER_JS);
+    .select({ endpoint: blobEndpoints.endpoint })
+    .from(blobEndpoints)
+    .where(eq(blobEndpoints.sha256, sha256))
+    .orderBy(blobEndpoints.endpoint)
+    .limit(MAX_ENDPOINTS_PER_BLOB);
 
   return rows.map((row) => row.endpoint);
+}
+
+async function claimBlobAnalysis(
+  db: Db,
+  sha256: string
+): Promise<"claimed" | "complete" | "busy"> {
+  const staleBefore = new Date(Date.now() - BLOB_ANALYSIS_CLAIM_TIMEOUT_MS);
+  const [claimed] = await db
+    .update(jsBlobs)
+    .set({ endpointAnalysisStartedAt: new Date() })
+    .where(
+      and(
+        eq(jsBlobs.sha256, sha256),
+        isNull(jsBlobs.endpointAnalyzedAt),
+        or(
+          isNull(jsBlobs.endpointAnalysisStartedAt),
+          lt(jsBlobs.endpointAnalysisStartedAt, staleBefore)
+        )
+      )
+    )
+    .returning({ sha256: jsBlobs.sha256 });
+  if (claimed) return "claimed";
+
+  const [current] = await db
+    .select({ endpointAnalyzedAt: jsBlobs.endpointAnalyzedAt })
+    .from(jsBlobs)
+    .where(eq(jsBlobs.sha256, sha256))
+    .limit(1);
+  if (!current) throw new Error(`JS blob ${sha256} does not exist`);
+  return current.endpointAnalyzedAt ? "complete" : "busy";
+}
+
+async function markBlobAnalysisComplete(db: Db, sha256: string): Promise<void> {
+  const completedAt = new Date();
+  const [updated] = await db
+    .update(jsBlobs)
+    .set({ endpointAnalyzedAt: completedAt, endpointAnalysisStartedAt: null })
+    .where(eq(jsBlobs.sha256, sha256))
+    .returning({ sha256: jsBlobs.sha256 });
+  if (!updated) throw new Error(`JS blob ${sha256} disappeared during analysis`);
+
+  // Occurrences skipped while this blob was claimed can be selected on the
+  // next scheduler tick instead of waiting for the retry window.
+  await db
+    .update(javascriptFiles)
+    .set({ endpointAnalysisStartedAt: null })
+    .where(
+      and(
+        eq(javascriptFiles.sha256, sha256),
+        isNull(javascriptFiles.endpointAnalyzedAt)
+      )
+    );
+}
+
+async function releaseBlobAnalysisClaim(db: Db, sha256: string): Promise<void> {
+  await db
+    .update(jsBlobs)
+    .set({ endpointAnalysisStartedAt: null })
+    .where(and(eq(jsBlobs.sha256, sha256), isNull(jsBlobs.endpointAnalyzedAt)));
 }
 
 /**
@@ -198,26 +329,44 @@ async function loadPersistedEndpointValues(db: Db, jsId: number): Promise<string
  */
 export async function runEndpointAnalysisAttempt(
   jsId: number,
-  jsUrl: string,
+  sha256: string,
   operations: EndpointAnalysisOperations
-): Promise<{ found: number; accepted: number }> {
-  const foundEndpoints = await operations.findEndpoints(jsUrl);
-  const candidates = sanitizeEndpointCandidates(foundEndpoints);
-  const persistedEndpoints = await operations.loadPersistedEndpoints(jsId);
-  const recoveryCandidates = sanitizeEndpointCandidates([
-    // Persisted rows come first so a changed LinkFinder result cannot crowd
-    // partial work from an earlier attempt out of the bounded recovery set.
-    ...persistedEndpoints,
-    ...candidates.map(({ endpoint }) => endpoint),
-  ]);
+): Promise<{ found: number; accepted: number; deferred: boolean }> {
+  const claim = await operations.claimBlobAnalysis(sha256);
+  if (claim === "busy") return { found: 0, accepted: 0, deferred: true };
 
-  // Persist and fan out the exact same bounded union. This keeps the database,
-  // queues and checkpoint coherent even when LinkFinder changes between tries.
-  await operations.persistEndpoints(jsId, recoveryCandidates);
-  await operations.fanOut(jsId, recoveryCandidates);
+  let found = 0;
+  let candidates: EndpointCandidate[];
+  if (claim === "complete") {
+    candidates = sanitizeEndpointCandidates(
+      await operations.loadPersistedEndpoints(sha256)
+    );
+  } else {
+    try {
+      const persistedEndpoints = await operations.loadPersistedEndpoints(sha256);
+      const body = await operations.readBlob();
+      const foundEndpoints = await operations.findEndpoints(body);
+      found = foundEndpoints.length;
+      candidates = sanitizeEndpointCandidates([
+        // Partial rows from an earlier attempt remain first so a changed tool
+        // result cannot crowd durable work out of the bounded recovery set.
+        ...persistedEndpoints,
+        ...foundEndpoints,
+      ]);
+      await operations.persistEndpoints(sha256, candidates);
+      await operations.markBlobComplete(sha256);
+    } catch (error) {
+      await operations.releaseBlobClaim(sha256).catch(() => undefined);
+      throw error;
+    }
+  }
+
+  // Blob completion precedes occurrence fan-out. A queue failure can retry
+  // cheaply from shared rows without invoking LinkFinder again.
+  await operations.fanOut(jsId, candidates);
   await operations.markComplete(jsId);
 
-  return { found: foundEndpoints.length, accepted: candidates.length };
+  return { found, accepted: candidates.length, deferred: false };
 }
 
 export function buildScopedFanOutJobs(
@@ -369,6 +518,7 @@ async function fanOutScopedHosts(
 export async function processAnalyzeJs(
   job: { data: AnalyzeJsJob },
   db: Db,
+  store: BlobStore,
   scanQueue: Queue<ScanHttpJob>,
   detectTechQueue: Queue<DetectTechnologyJob>,
   limits: EndpointFanoutLimits = UNBOUNDED_FANOUT
@@ -376,26 +526,17 @@ export async function processAnalyzeJs(
   const { jsId } = job.data;
 
   const input = await loadAnalysisInput(db, jsId);
-  if (!input || input.endpointAnalyzedAt) return;
+  if (!input || (input.endpointAnalyzedAt && input.blobEndpointAnalyzedAt)) return;
 
   // Legacy jobs were enqueued before JS download. Drain them without invoking
   // LinkFinder; js-worker will retry and enqueue again after persistence.
-  if (!input.fetchedAt) {
+  if (
+    !input.fetchedAt ||
+    !input.sha256 ||
+    !input.storageKey ||
+    !input.compression
+  ) {
     console.log(JSON.stringify({ level: "info", msg: "Skipping incomplete JS analysis", jsId }));
-    return;
-  }
-
-  // Historical queues contain third-party assets discovered before scope
-  // propagation was enforced. Drain them without network or database fan-out;
-  // if an operator later links the asset, its NULL checkpoint remains healable.
-  if (!input.parentScope) {
-    // Remember that this row has passed through the new worker. If it is later
-    // linked to a scope, it must resume the real analysis rather than being
-    // mistaken for fully processed legacy data merely because endpoints exist.
-    if (!input.endpointAnalysisStartedAt) {
-      await markEndpointAnalysisStarted(db, jsId);
-    }
-    console.log(JSON.stringify({ level: "info", msg: "Skipping unscoped JS analysis", jsId }));
     return;
   }
 
@@ -406,14 +547,26 @@ export async function processAnalyzeJs(
     await markEndpointAnalysisStarted(db, jsId);
   }
 
+  if (!input.parentScope) {
+    console.log(
+      JSON.stringify({
+        level: "info",
+        msg: "Indexing shared JS blob without unscoped fan-out",
+        jsId,
+      })
+    );
+  }
   console.log(JSON.stringify({ level: "info", msg: `Analyzing JS ${input.jsUrl}` }));
 
-  const result = await runEndpointAnalysisAttempt(jsId, input.jsUrl, {
+  const result = await runEndpointAnalysisAttempt(jsId, input.sha256, {
+    claimBlobAnalysis: (sha256) => claimBlobAnalysis(db, sha256),
+    readBlob: () => store.get(input.storageKey!, input.compression!),
     findEndpoints: runLinkfinder,
-    persistEndpoints: (analysisJsId, candidates) =>
-      insertEndpointBatches(db, analysisJsId, candidates),
-    loadPersistedEndpoints: (analysisJsId) =>
-      loadPersistedEndpointValues(db, analysisJsId),
+    persistEndpoints: (sha256, candidates) =>
+      insertEndpointBatches(db, sha256, candidates),
+    loadPersistedEndpoints: (sha256) => loadPersistedEndpointValues(db, sha256),
+    markBlobComplete: (sha256) => markBlobAnalysisComplete(db, sha256),
+    releaseBlobClaim: (sha256) => releaseBlobAnalysisClaim(db, sha256),
     fanOut: (analysisJsId, candidates) =>
       fanOutScopedHosts(
         db,
@@ -426,6 +579,18 @@ export async function processAnalyzeJs(
       ),
     markComplete: (analysisJsId) => markEndpointAnalysisComplete(db, analysisJsId),
   });
+
+  if (result.deferred) {
+    console.log(
+      JSON.stringify({
+        level: "info",
+        msg: "Shared JS blob analysis already in progress",
+        jsId,
+        sha256: input.sha256,
+      })
+    );
+    return;
+  }
 
   if (result.accepted < result.found) {
     console.log(

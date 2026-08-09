@@ -123,6 +123,9 @@ importers:
       '@yaad/queue':
         specifier: workspace:*
         version: link:../../packages/queue
+      '@yaad/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
       '@yaad/subprocess':
         specifier: workspace:*
         version: link:../../packages/subprocess

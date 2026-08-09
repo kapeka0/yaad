@@ -3,9 +3,10 @@ import test from "node:test";
 import {
   ENDPOINT_INSERT_BATCH_SIZE,
   MAX_ENDPOINT_BYTES,
-  MAX_ENDPOINTS_PER_JS,
+  MAX_ENDPOINTS_PER_BLOB,
   buildScopedFanOutJobs,
   extractHostname,
+  isHighSignalEndpoint,
   isHostnameInScope,
   persistEndpointBatches,
   runEndpointAnalysisAttempt,
@@ -19,30 +20,44 @@ test("scope matching is label-delimited", () => {
   assert.equal(isHostnameInScope("example.com.evil.test", "example.com"), false);
 });
 
-test("endpoint candidates are normalized, deduplicated and index-safe", () => {
+test("endpoint candidates keep useful routes and reject static/tool noise", () => {
   const tooLong = `https://example.com/${"a".repeat(MAX_ENDPOINT_BYTES)}`;
   const candidates = sanitizeEndpointCandidates([
     " https://api.example.com/v1 ",
     "https://api.example.com/v1",
-    "relative/path",
+    "'/relative/users/{id}'",
+    "api/v1/users",
+    "graphql",
+    "image/png",
+    "text/javascript; charset=utf-8",
+    "http://www.w3.org/2000/svg",
+    "https://example.com/_next/static/chunks/app.js",
+    "https://example.com/assets/font.woff2?v=1",
+    "data:text/plain,hello",
+    "Usage: python /opt/linkfinder/linkfinder.py [Options] use -h for help",
+    "unrelatedIdentifier",
     "bad\0value",
     tooLong,
   ]);
 
   assert.deepEqual(candidates, [
     { endpoint: "https://api.example.com/v1", hostname: "api.example.com" },
-    { endpoint: "relative/path", hostname: null },
+    { endpoint: "/relative/users/{id}", hostname: null },
+    { endpoint: "api/v1/users", hostname: null },
+    { endpoint: "graphql", hostname: null },
   ]);
+  assert.equal(isHighSignalEndpoint("/api/v2/users?active=1"), true);
+  assert.equal(isHighSignalEndpoint("application/json"), false);
 });
 
-test("endpoint output has a hard per-file cap", () => {
+test("endpoint output has a hard per-blob cap", () => {
   const candidates = sanitizeEndpointCandidates(
-    Array.from({ length: MAX_ENDPOINTS_PER_JS + 20 }, (_, index) =>
-      `https://example.com/${index}`
+    Array.from({ length: MAX_ENDPOINTS_PER_BLOB + 20 }, (_, index) =>
+      `https://example.com/api/${index}`
     )
   );
 
-  assert.equal(candidates.length, MAX_ENDPOINTS_PER_JS);
+  assert.equal(candidates.length, MAX_ENDPOINTS_PER_BLOB);
   assert.equal(extractHostname("ftp://example.com/file"), null);
 });
 
@@ -64,106 +79,115 @@ test("fan-out jobs use global stable asset IDs", () => {
   assert.deepEqual(retry, first);
 });
 
-test("retries finish partial endpoint batches and missing fan-out before checkpointing", async () => {
+test("shared blob retries recover partial persistence and fan-out without reanalysis", async () => {
   const jsId = 99;
+  const sha256 = "a".repeat(64);
   const foundEndpoints = Array.from(
     { length: ENDPOINT_INSERT_BATCH_SIZE + 50 },
     (_, index) => `https://api-${index}.example.com/v1`
   );
   const persistedEndpoints = new Set<string>();
-  const assetIds = new Map<string, number>();
-  const scanJobIds = new Set<string>();
-  const techJobIds = new Set<string>();
+  let claimed = false;
+  let blobComplete = false;
   let failSecondBatch = true;
+  let failFirstFanOut = true;
+  let reads = 0;
   let findAttempts = 0;
+  let releases = 0;
   let fanOutAttempts = 0;
-  let completed = 0;
-  const changedEndpoints = Array.from(
-    { length: MAX_ENDPOINTS_PER_JS },
-    (_, index) => `https://changed-${index}.example.com/v2`
-  );
+  let completedOccurrences = 0;
 
   const operations = {
+    claimBlobAnalysis: async () => {
+      if (blobComplete) return "complete" as const;
+      if (claimed) return "busy" as const;
+      claimed = true;
+      return "claimed" as const;
+    },
+    readBlob: async () => {
+      reads += 1;
+      return Buffer.from("const endpoint = '/api/v1';");
+    },
     findEndpoints: async () => {
       findAttempts += 1;
-      // The source can change between attempts. Persisted candidates must
-      // still recover assets created before the queue failure.
-      return findAttempts === 3 ? changedEndpoints : foundEndpoints;
+      return foundEndpoints;
     },
     persistEndpoints: async (
-      analysisJsId: number,
+      analysisSha: string,
       candidates: ReturnType<typeof sanitizeEndpointCandidates>
     ) => {
       let batchNumber = 0;
-      await persistEndpointBatches(analysisJsId, candidates, async (rows) => {
+      await persistEndpointBatches(analysisSha, candidates, async (rows) => {
         batchNumber += 1;
         if (failSecondBatch && batchNumber === 2) {
           failSecondBatch = false;
           throw new Error("second endpoint batch failed");
         }
-        for (const row of rows) persistedEndpoints.add(row.endpoint);
+        for (const row of rows) {
+          assert.equal(row.sha256, sha256);
+          persistedEndpoints.add(row.endpoint);
+        }
       });
     },
     loadPersistedEndpoints: async () => [...persistedEndpoints],
-    fanOut: async (
-      _analysisJsId: number,
-      candidates: ReturnType<typeof sanitizeEndpointCandidates>
-    ) => {
+    markBlobComplete: async () => {
+      blobComplete = true;
+      claimed = false;
+    },
+    releaseBlobClaim: async () => {
+      releases += 1;
+      claimed = false;
+    },
+    fanOut: async () => {
       fanOutAttempts += 1;
-      const scopedHosts = new Map<string, string>();
-      for (const candidate of candidates) {
-        if (!candidate.hostname) continue;
-        scopedHosts.set(candidate.hostname, candidate.endpoint);
-        if (!assetIds.has(candidate.hostname)) {
-          assetIds.set(candidate.hostname, assetIds.size + 1);
-        }
+      if (failFirstFanOut) {
+        failFirstFanOut = false;
+        throw new Error("fan-out queue unavailable");
       }
-
-      // Every retry receives all upserted rows, not only rows that were new in
-      // this attempt. This mirrors PostgreSQL INSERT .. ON CONFLICT .. RETURNING.
-      const discovered = [...scopedHosts.keys()].map((domain) => ({
-        id: assetIds.get(domain)!,
-        domain,
-      }));
-      const jobs = buildScopedFanOutJobs(discovered, discovered, scopedHosts);
-      for (const queued of jobs.scanJobs) scanJobIds.add(queued.opts.jobId!);
-
-      if (fanOutAttempts === 1) {
-        throw new Error("technology queue unavailable");
-      }
-      for (const queued of jobs.techJobs) techJobIds.add(queued.opts.jobId!);
     },
     markComplete: async () => {
-      completed += 1;
+      completedOccurrences += 1;
     },
   };
 
   await assert.rejects(
-    runEndpointAnalysisAttempt(jsId, "https://example.com/app.js", operations),
+    runEndpointAnalysisAttempt(jsId, sha256, operations),
     /second endpoint batch failed/
   );
   assert.equal(persistedEndpoints.size, ENDPOINT_INSERT_BATCH_SIZE);
-  assert.equal(fanOutAttempts, 0);
-  assert.equal(completed, 0);
+  assert.equal(blobComplete, false);
+  assert.equal(releases, 1);
 
   await assert.rejects(
-    runEndpointAnalysisAttempt(jsId, "https://example.com/app.js", operations),
-    /technology queue unavailable/
+    runEndpointAnalysisAttempt(jsId, sha256, operations),
+    /fan-out queue unavailable/
   );
   assert.equal(persistedEndpoints.size, foundEndpoints.length);
-  assert.equal(assetIds.size, foundEndpoints.length);
-  assert.equal(scanJobIds.size, foundEndpoints.length);
-  assert.equal(techJobIds.size, 0);
-  assert.equal(completed, 0);
-  const partiallyPersistedAssetIds = [...assetIds.values()];
+  assert.equal(blobComplete, true);
+  assert.equal(completedOccurrences, 0);
 
-  await runEndpointAnalysisAttempt(jsId, "https://example.com/app.js", operations);
-  assert.equal(persistedEndpoints.size, MAX_ENDPOINTS_PER_JS);
-  assert.equal(scanJobIds.size, MAX_ENDPOINTS_PER_JS);
-  assert.equal(techJobIds.size, MAX_ENDPOINTS_PER_JS);
-  for (const assetId of partiallyPersistedAssetIds) {
-    assert.equal(techJobIds.has(`endpoint-tech-${assetId}`), true);
-  }
-  assert.equal(findAttempts, 3);
-  assert.equal(completed, 1);
+  const recovered = await runEndpointAnalysisAttempt(jsId, sha256, operations);
+  assert.equal(recovered.deferred, false);
+  assert.equal(fanOutAttempts, 2);
+  assert.equal(completedOccurrences, 1);
+  assert.equal(reads, 2);
+  assert.equal(findAttempts, 2);
+});
+
+test("an occurrence defers while another worker owns the shared blob", async () => {
+  let sideEffects = 0;
+  const result = await runEndpointAnalysisAttempt(7, "b".repeat(64), {
+    claimBlobAnalysis: async () => "busy",
+    readBlob: async () => { sideEffects += 1; return Buffer.alloc(0); },
+    findEndpoints: async () => { sideEffects += 1; return []; },
+    persistEndpoints: async () => { sideEffects += 1; },
+    loadPersistedEndpoints: async () => { sideEffects += 1; return []; },
+    markBlobComplete: async () => { sideEffects += 1; },
+    releaseBlobClaim: async () => { sideEffects += 1; },
+    fanOut: async () => { sideEffects += 1; },
+    markComplete: async () => { sideEffects += 1; },
+  });
+
+  assert.deepEqual(result, { found: 0, accepted: 0, deferred: true });
+  assert.equal(sideEffects, 0);
 });

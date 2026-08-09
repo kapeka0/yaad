@@ -146,6 +146,11 @@ export const javascriptFiles = pgTable(
   },
   (t) => ({
     uniqServiceUrl: uniqueIndex("javascript_files_service_url_idx").on(t.serviceId, t.url),
+    endpointPendingIdx: index("javascript_files_endpoint_pending_idx")
+      .on(t.endpointAnalysisStartedAt, t.id)
+      .where(
+        sql`${t.endpointAnalyzedAt} is null and ${t.sha256} is not null and ${t.fetchedAt} is not null`
+      ),
   })
 );
 
@@ -160,7 +165,29 @@ export const jsBlobs = pgTable("js_blobs", {
   // Number of javascript_files rows pointing at this blob (for retention decisions)
   refCount: integer("ref_count").notNull().default(1),
   firstSeen: timestamp("first_seen").defaultNow().notNull(),
+  // Endpoint extraction is content-addressed too. A claim timestamp prevents
+  // several occurrences of the same popular bundle from running LinkFinder
+  // concurrently; completion is durable even when occurrence fan-out fails.
+  endpointAnalysisStartedAt: timestamp("endpoint_analysis_started_at"),
+  endpointAnalyzedAt: timestamp("endpoint_analyzed_at"),
 });
+
+// High-signal LinkFinder output is stored once per unique JS body. Asset and
+// program attribution still comes from javascript_files occurrences, so one
+// shared result can be fanned out safely inside each occurrence's scope.
+export const blobEndpoints = pgTable(
+  "blob_endpoints",
+  {
+    sha256: text("sha256")
+      .notNull()
+      .references(() => jsBlobs.sha256, { onDelete: "cascade" }),
+    endpoint: text("endpoint").notNull(),
+    firstSeen: timestamp("first_seen").defaultNow().notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.sha256, t.endpoint] }),
+  })
+);
 
 // Detected JS libraries/versions per file (retire.js + regex signatures).
 // This is the structured index used to cross-reference CVEs against assets.
@@ -190,6 +217,9 @@ export const jsLibraries = pgTable(
   })
 );
 
+// Legacy occurrence-level endpoint storage. Migration 0011 truncates this
+// table after switching workers and stats to blobEndpoints. Keep the schema
+// export temporarily so older asset-deletion code remains compatible.
 export const endpoints = pgTable(
   "endpoints",
   {
@@ -249,6 +279,8 @@ export type JavascriptFile = typeof javascriptFiles.$inferSelect;
 export type NewJavascriptFile = typeof javascriptFiles.$inferInsert;
 export type JsBlob = typeof jsBlobs.$inferSelect;
 export type NewJsBlob = typeof jsBlobs.$inferInsert;
+export type BlobEndpoint = typeof blobEndpoints.$inferSelect;
+export type NewBlobEndpoint = typeof blobEndpoints.$inferInsert;
 export type JsLibrary = typeof jsLibraries.$inferSelect;
 export type NewJsLibrary = typeof jsLibraries.$inferInsert;
 export type Technology = typeof technologies.$inferSelect;

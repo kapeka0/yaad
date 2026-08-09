@@ -92,8 +92,9 @@ A scalable system that collects assets from bug bounty programs, enumerates thei
    └─ stores javascript_files + enqueues analyze_js
 
 5. endpoint-worker
-   └─ runs linkfinder on each JS file
-   └─ stores endpoints
+   └─ runs LinkFinder once per unique stored JS body (sha256)
+   └─ filters static/tool noise and stores bounded blob_endpoints
+   └─ reuses shared results for every scoped JS occurrence
    └─ extracts new subdomains → enqueues scan_http + detect_technology
 
 6. tech-worker
@@ -145,7 +146,8 @@ and any known CVEs, and mines hostnames from the body to recurse back into
 `analyze_js`.
 
 ### `endpoint-worker` — queue: `analyze_js`
-Runs **LinkFinder** over each JS file to extract endpoint paths into `endpoints`.
+Runs **LinkFinder** over the exact content-addressed MinIO body once per SHA,
+stores high-signal paths in `blob_endpoints`, and reuses them for scoped fan-out.
 Absolute URLs yield new hostnames, which are added as assets and queued for
 `scan_http` + `detect_technology` — a second recursion path complementing the
 js-worker's regex mining.
@@ -190,7 +192,8 @@ browser based, isolated in its own container.
 | `javascript_files`   | JS file URLs per service + sha256/size   |
 | `js_blobs`           | Content-addressable JS bodies (deduped, zstd, in MinIO) |
 | `js_libraries`       | Detected JS libraries + versions + CVEs  |
-| `endpoints`          | Endpoints extracted from JS files        |
+| `blob_endpoints`     | Deduplicated high-signal endpoints per JS SHA |
+| `endpoints`          | Empty compatibility table for legacy installs |
 | `technologies`       | Unique technology + version records      |
 | `asset_technologies` | Many-to-many: assets ↔ technologies      |
 

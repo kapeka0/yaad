@@ -18,6 +18,7 @@ interface CountsRow {
   vulnerable_libraries: number | string;
   technologies: number | string;
   endpoints: number | string;
+  endpoint_indexed_blobs: number | string;
   js_blobs: number | string;
   blob_size_bytes: number | string;
   blob_stored_bytes: number | string;
@@ -47,6 +48,7 @@ interface StatsPayload {
   };
   libraries: { detected: number; vulnerable: number };
   storage: { uniqueBlobs: number; originalBytes: number; storedBytes: number; ratio: number };
+  endpointIndex: { indexedBlobs: number; totalBlobs: number };
   queues: Record<string, QueueCounts>;
   lastScan: string | null;
 }
@@ -68,9 +70,9 @@ function getQueueClients(): Queue[] {
 async function computeStats(): Promise<StatsPayload> {
   const dbInstance = getDbInstance();
 
-  // Exact COUNT(*) on the 17 GB endpoints table took more than 30 seconds on
-  // the RPi. PostgreSQL's planner estimates are ideal for dashboard counters:
-  // constant-time, low-I/O and refreshed by ANALYZE/autovacuum.
+  // PostgreSQL planner estimates keep dashboard counters constant-time and
+  // low-I/O. Endpoints are content-addressed, so this is the unique useful
+  // result count rather than duplicated per-occurrence rows.
   const result = await dbInstance.execute(sql`
       WITH estimates AS (
         SELECT c.relname, GREATEST(c.reltuples, 0)::bigint AS row_estimate
@@ -89,7 +91,8 @@ async function computeStats(): Promise<StatsPayload> {
         (SELECT count(*) FROM js_libraries)::int                          AS js_libraries,
         (SELECT count(*) FROM js_libraries WHERE vulnerabilities IS NOT NULL)::int AS vulnerable_libraries,
         COALESCE(max(row_estimate) FILTER (WHERE relname = 'technologies'), 0)::bigint AS technologies,
-        COALESCE(max(row_estimate) FILTER (WHERE relname = 'endpoints'), 0)::bigint AS endpoints,
+        COALESCE(max(row_estimate) FILTER (WHERE relname = 'blob_endpoints'), 0)::bigint AS endpoints,
+        (SELECT count(*) FROM js_blobs WHERE endpoint_analyzed_at IS NOT NULL)::int AS endpoint_indexed_blobs,
         COALESCE(max(row_estimate) FILTER (WHERE relname = 'js_blobs'), 0)::bigint AS js_blobs,
         (SELECT COALESCE(sum(size_bytes), 0) FROM js_blobs)::bigint       AS blob_size_bytes,
         (SELECT COALESCE(sum(stored_bytes), 0) FROM js_blobs)::bigint     AS blob_stored_bytes,
@@ -156,6 +159,10 @@ async function computeStats(): Promise<StatsPayload> {
       originalBytes: blobSize,
       storedBytes: blobStored,
       ratio: blobStored > 0 ? blobSize / blobStored : 0,
+    },
+    endpointIndex: {
+      indexedBlobs: Number(row.endpoint_indexed_blobs),
+      totalBlobs: Number(row.js_blobs),
     },
     queues,
     lastScan,

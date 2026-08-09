@@ -13,6 +13,7 @@
     "@yaad/config": "workspace:*",
     "@yaad/db": "workspace:*",
     "@yaad/queue": "workspace:*",
+    "@yaad/storage": "workspace:*",
     "@yaad/subprocess": "workspace:*",
     "@yaad/types": "workspace:*",
     "bullmq": "^5.7.8",

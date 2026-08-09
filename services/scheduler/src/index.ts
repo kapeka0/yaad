@@ -62,6 +62,7 @@ async function main(): Promise<void> {
         db,
         enumerateQueue,
         scanQueue,
+        analyzeJsQueue,
         detectTechQueue,
         scheduler,
         downstreamQueues

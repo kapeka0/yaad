@@ -1,6 +1,7 @@
 import { Worker, Queue } from "bullmq";
 import { loadConfig } from "@yaad/config";
 import { getDb } from "@yaad/db";
+import { BlobStore } from "@yaad/storage";
 import {
   DEFAULT_WORKER_OPTIONS,
   getRedisOptions,
@@ -13,6 +14,7 @@ import { processAnalyzeJs } from "./processor.js";
 async function main(): Promise<void> {
   const config = loadConfig();
   const db = getDb(config.databaseUrl);
+  const store = new BlobStore(config.storage);
   const redisOptions = getRedisOptions(config.redisUrl);
 
   const scanQueue = new Queue<ScanHttpJob>(QUEUES.SCAN_HTTP, { connection: redisOptions });
@@ -21,7 +23,7 @@ async function main(): Promise<void> {
   const worker = new Worker<AnalyzeJsJob>(
     QUEUES.ANALYZE_JS,
     async (job) => {
-      await processAnalyzeJs(job, db, scanQueue, detectTechQueue, {
+      await processAnalyzeJs(job, db, store, scanQueue, detectTechQueue, {
         maxScanQueueDepth: config.scheduler.maxScanQueueDepth,
         maxTechQueueDepth: config.scheduler.maxTechQueueDepth,
       });
