@@ -85,6 +85,13 @@
       "when": 1786262400000,
       "tag": "0011_blob_endpoints",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1786266000000,
+      "tag": "0012_refine_blob_endpoints",
+      "breakpoints": true
     }
   ]
 }

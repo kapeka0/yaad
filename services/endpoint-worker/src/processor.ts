@@ -100,7 +100,10 @@ export function isHighSignalEndpoint(endpoint: string): boolean {
     LINKFINDER_NOISE.test(endpoint) ||
     STATIC_RESOURCE_EXTENSION.test(endpoint) ||
     /(?:^|\/)node_modules\//i.test(endpoint) ||
-    /\/_next\/static\//i.test(endpoint)
+    /\/_next\/static\//i.test(endpoint) ||
+    /^\/_next\/?$/i.test(endpoint) ||
+    /^\/_next\/image\?/i.test(endpoint) ||
+    /\s+\d+w(?:\s*,|$)/i.test(endpoint)
   ) {
     return false;
   }
@@ -139,6 +142,10 @@ export function sanitizeEndpointCandidates(foundEndpoints: string[]): EndpointCa
     ) {
       endpoint = endpoint.slice(1, -1).trim();
     }
+    // LinkFinder can retain JavaScript string escaping and emit the same path
+    // with one or more trailing backslashes. Canonicalize those artifacts
+    // before filtering and deduplication.
+    endpoint = endpoint.replace(/\\\//g, "/").replace(/\\+$/g, "").trim();
     if (
       !endpoint ||
       endpoint.includes("\0") ||
