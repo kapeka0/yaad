@@ -82,6 +82,16 @@ export const assets = pgTable(
     schedulerReadyIdx: index("assets_scheduler_ready_idx")
       .on(t.lastScannedAt, t.lastScanAttemptAt)
       .where(sql`${t.scopeId} is not null and ${t.resolved} = true`),
+    unresolvedRecoveryIdx: index("assets_unresolved_recovery_idx")
+      .on(t.lastScanAttemptAt, t.id)
+      .where(
+        sql`${t.scopeId} is not null and ${t.resolved} = false and ${t.lastScannedAt} is null`
+      ),
+    unresolvedManualRecoveryIdx: index("assets_unresolved_manual_recovery_idx")
+      .on(t.lastScanAttemptAt, t.id)
+      .where(
+        sql`${t.scopeId} is not null and ${t.resolved} = false and ${t.lastScannedAt} is null and ${t.source} = 'manual'`
+      ),
     endpointScanRecoveryIdx: index("assets_endpoint_scan_recovery_idx")
       .on(t.lastScannedAt, t.endpointScanEnqueuedAt)
       .where(sql`${t.endpointFanoutManagedAt} is not null`),

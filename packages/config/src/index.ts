@@ -43,6 +43,9 @@ export interface SchedulerSettings {
   rescanIntervalHours: number;
   // Failed or stuck attempts may be queued again after this interval.
   retryIntervalHours: number;
+  // Unresolved/no-service assets are retried more slowly and in smaller batches.
+  unresolvedRetryIntervalHours: number;
+  unresolvedBatchSize: number;
   // Backpressure limits. The scheduler never adds work above these depths.
   maxEnumQueueDepth: number;
   maxScanQueueDepth: number;
@@ -93,6 +96,14 @@ export function loadConfig(): AppConfig {
       enumIntervalHours: parseInt(process.env.RESCAN_ENUM_INTERVAL_HOURS ?? "168", 10), // 7 days
       rescanIntervalHours: parseInt(process.env.RESCAN_HTTP_INTERVAL_HOURS ?? "24", 10), // 1 day
       retryIntervalHours: parseInt(process.env.SCHEDULER_RETRY_INTERVAL_HOURS ?? "6", 10),
+      unresolvedRetryIntervalHours: parseInt(
+        process.env.RESCAN_UNRESOLVED_INTERVAL_HOURS ?? "168",
+        10
+      ),
+      unresolvedBatchSize: parseInt(
+        process.env.SCHEDULER_UNRESOLVED_BATCH_SIZE ?? "100",
+        10
+      ),
       maxEnumQueueDepth: parseInt(process.env.SCHEDULER_MAX_ENUM_QUEUE ?? "10000", 10),
       maxScanQueueDepth: parseInt(process.env.SCHEDULER_MAX_SCAN_QUEUE ?? "10000", 10),
       maxCollectQueueDepth: parseInt(process.env.SCHEDULER_MAX_COLLECT_QUEUE ?? "5000", 10),

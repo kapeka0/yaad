@@ -1,8 +1,12 @@
 import { Queue } from "bullmq";
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import type { Db } from "@yaad/db";
 import { programs, scopes, assets } from "@yaad/db";
-import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
+import {
+  DEFAULT_JOB_OPTIONS,
+  getAssetScanJobId,
+  shouldQueueAssetScan,
+} from "@yaad/queue";
 import type { EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
 import { normalizeAssetDomain, type NormalizedProgram } from "@yaad/types";
 
@@ -31,6 +35,8 @@ export async function importPrograms(
   enumerateQueue: Queue<EnumerateSubdomainsJob>,
   scanQueue: Queue<ScanHttpJob>
 ): Promise<void> {
+  const scanCandidates = new Map<number, string>();
+
   for (const prog of normalizedPrograms) {
     // Upsert program
     const [program] = await db
@@ -103,18 +109,38 @@ export async function importPrograms(
             // Importing a root scope is an explicit ownership decision.
             set: { scopeId: insertedScope.id, lastSeen: new Date() },
           })
-          .returning({ id: assets.id, isNew: sql<boolean>`(xmax = 0)` });
+          .returning({
+            id: assets.id,
+            resolved: assets.resolved,
+            lastScannedAt: assets.lastScannedAt,
+            isNew: sql<boolean>`(xmax = 0)`,
+          });
 
-        // Scan newly imported roots immediately; re-imports just refresh
-        // last_seen and let the scheduler drive periodic re-scans.
-        if (asset?.isNew) {
-          await scanQueue.add(
-            "scan_http",
-            { domain, assetId: asset.id },
-            DEFAULT_JOB_OPTIONS
-          );
-        }
+        // Existing discoveries can be linked to a program before their first
+        // successful scan, so ownership changes must also recover them.
+        if (asset && shouldQueueAssetScan(asset)) scanCandidates.set(asset.id, domain);
       }
     }
+  }
+
+  if (scanCandidates.size > 0) {
+    const attemptedAt = new Date();
+    const retryIntervalHours =
+      Number.parseInt(process.env.SCHEDULER_RETRY_INTERVAL_HOURS ?? "6", 10) || 6;
+    const candidates = [...scanCandidates.entries()];
+    await scanQueue.addBulk(
+      candidates.map(([assetId, domain]) => ({
+        name: "scan_http",
+        data: { domain, assetId },
+        opts: {
+          ...DEFAULT_JOB_OPTIONS,
+          jobId: getAssetScanJobId(assetId, attemptedAt, retryIntervalHours),
+        },
+      }))
+    );
+    await db
+      .update(assets)
+      .set({ lastScanAttemptAt: attemptedAt })
+      .where(inArray(assets.id, candidates.map(([assetId]) => assetId)));
   }
 }

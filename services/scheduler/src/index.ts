@@ -39,9 +39,11 @@ async function main(): Promise<void> {
   log("info", "Scheduler started", {
     tickMs: scheduler.tickMs,
     batchSize: scheduler.batchSize,
+    unresolvedBatchSize: scheduler.unresolvedBatchSize,
     enumIntervalHours: scheduler.enumIntervalHours,
     rescanIntervalHours: scheduler.rescanIntervalHours,
     retryIntervalHours: scheduler.retryIntervalHours,
+    unresolvedRetryIntervalHours: scheduler.unresolvedRetryIntervalHours,
     maxEnumQueueDepth: scheduler.maxEnumQueueDepth,
     maxScanQueueDepth: scheduler.maxScanQueueDepth,
     maxCollectQueueDepth: scheduler.maxCollectQueueDepth,

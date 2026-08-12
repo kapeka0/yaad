@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Queue } from "bullmq";
 import { db as getDbInstance } from "@/lib/db";
-import { getRedisOptions, QUEUES, DEFAULT_JOB_OPTIONS } from "@yaad/queue";
-import { programs, scopes, assets, type Scope, type Asset } from "@yaad/db";
-import { eq, sql } from "drizzle-orm";
+import {
+  getRedisOptions,
+  QUEUES,
+  DEFAULT_JOB_OPTIONS,
+  getAssetScanJobId,
+  shouldQueueAssetScan,
+} from "@yaad/queue";
+import type { ScanHttpJob } from "@yaad/queue";
+import { programs, scopes, assets, type Scope } from "@yaad/db";
+import { eq, inArray, sql } from "drizzle-orm";
 import { normalizeAssetDomain } from "@yaad/types";
 
 export const runtime = "nodejs";
@@ -23,6 +30,7 @@ function findMatchingScope(domain: string, programScopes: Scope[]): Scope | unde
 }
 
 export async function POST(req: NextRequest) {
+  let scanQueue: Queue<ScanHttpJob> | undefined;
   try {
     const body = await req.json();
     const { programId: rawProgramId, subdomains: rawSubdomains } = body;
@@ -66,11 +74,12 @@ export async function POST(req: NextRequest) {
       .from(scopes)
       .where(eq(scopes.programId, programId));
 
-    const scanQueue = new Queue(QUEUES.SCAN_HTTP, { connection: redisOptions });
-    const insertedAssets: Asset[] = [];
+    scanQueue = new Queue<ScanHttpJob>(QUEUES.SCAN_HTTP, { connection: redisOptions });
+    let linkedAssets = 0;
     let newAssets = 0;
     let skippedAssets = 0;
     let enqueuedJobs = 0;
+    const scanCandidates = new Map<number, string>();
 
     for (const rawSub of subdomainsList) {
       const domain = normalizeAssetDomain(rawSub);
@@ -120,39 +129,46 @@ export async function POST(req: NextRequest) {
           // linked to the selected program instead of only being touched.
           set: { scopeId, source: "manual", lastSeen: new Date() },
         })
-        .returning({ id: assets.id, isNew: sql<boolean>`(xmax = 0)` });
+        .returning({
+          id: assets.id,
+          resolved: assets.resolved,
+          lastScannedAt: assets.lastScannedAt,
+          isNew: sql<boolean>`(xmax = 0)`,
+        });
 
       if (asset) {
-        // Find full asset object
-        const fullAssetRows = await dbInstance
-          .select()
-          .from(assets)
-          .where(eq(assets.id, asset.id))
-          .limit(1);
-        
-        if (fullAssetRows.length > 0) {
-          insertedAssets.push(fullAssetRows[0]);
-        }
-        
-        // 5. Enqueue scan if it is a new asset
-        if (asset.isNew) {
-          newAssets++;
-          await scanQueue.add(
-            "scan_http",
-            { domain, assetId: asset.id },
-            DEFAULT_JOB_OPTIONS
-          );
-          enqueuedJobs++;
-        }
+        linkedAssets++;
+        if (asset.isNew) newAssets++;
+        if (shouldQueueAssetScan(asset)) scanCandidates.set(asset.id, domain);
       }
     }
 
-    await scanQueue.close();
+    if (scanCandidates.size > 0) {
+      const attemptedAt = new Date();
+      const retryIntervalHours =
+        Number.parseInt(process.env.SCHEDULER_RETRY_INTERVAL_HOURS ?? "6", 10) || 6;
+      const candidates = [...scanCandidates.entries()];
+      await scanQueue.addBulk(
+        candidates.map(([assetId, domain]) => ({
+          name: "scan_http",
+          data: { domain, assetId },
+          opts: {
+            ...DEFAULT_JOB_OPTIONS,
+            jobId: getAssetScanJobId(assetId, attemptedAt, retryIntervalHours),
+          },
+        }))
+      );
+      await dbInstance
+        .update(assets)
+        .set({ lastScanAttemptAt: attemptedAt })
+        .where(inArray(assets.id, candidates.map(([assetId]) => assetId)));
+      enqueuedJobs = candidates.length;
+    }
 
     return NextResponse.json({
       success: true,
       processed: subdomainsList.length,
-      linked: insertedAssets.length,
+      linked: linkedAssets,
       inserted: newAssets,
       skipped: skippedAssets,
       enqueued: enqueuedJobs,
@@ -161,5 +177,7 @@ export async function POST(req: NextRequest) {
     console.error("Failed to ingest subdomains in bulk:", err);
     const errMsg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: errMsg }, { status: 500 });
+  } finally {
+    await scanQueue?.close().catch(() => undefined);
   }
 }

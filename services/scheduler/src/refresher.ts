@@ -1,8 +1,8 @@
 import { Queue } from "bullmq";
-import { and, or, eq, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
+import { and, or, eq, ne, lt, isNull, isNotNull, inArray, sql } from "drizzle-orm";
 import type { Db } from "@yaad/db";
 import { assets, javascriptFiles, jsBlobs, scopes } from "@yaad/db";
-import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
+import { DEFAULT_JOB_OPTIONS, getAssetScanJobId } from "@yaad/queue";
 import type {
   AnalyzeJsJob,
   DetectTechnologyJob,
@@ -37,6 +37,19 @@ function retryBucket(now: Date, retryIntervalHours: number): number {
 export interface QueuePressureSource {
   queue: Queue;
   maxDepth: number;
+}
+
+async function findSaturatedQueue(
+  downstreamQueues: QueuePressureSource[]
+): Promise<{ name: string; depth: number; maxDepth: number } | undefined> {
+  const depths = await Promise.all(
+    downstreamQueues.map(async ({ queue, maxDepth }) => ({
+      name: queue.name,
+      depth: await getQueueDepth(queue),
+      maxDepth,
+    }))
+  );
+  return depths.find(({ depth, maxDepth }) => depth >= maxDepth);
 }
 
 /**
@@ -119,14 +132,7 @@ export async function refreshStaleAssets(
   settings: SchedulerSettings,
   downstreamQueues: QueuePressureSource[] = []
 ): Promise<number> {
-  const downstreamDepths = await Promise.all(
-    downstreamQueues.map(async ({ queue, maxDepth }) => ({
-      name: queue.name,
-      depth: await getQueueDepth(queue),
-      maxDepth,
-    }))
-  );
-  const saturated = downstreamDepths.find(({ depth, maxDepth }) => depth >= maxDepth);
+  const saturated = await findSaturatedQueue(downstreamQueues);
   if (saturated) {
     log("info", "HTTP scheduler paused by downstream backpressure", {
       queue: saturated.name,
@@ -168,12 +174,14 @@ export async function refreshStaleAssets(
 
   if (rows.length > 0) {
     const attemptedAt = new Date();
-    const bucket = retryBucket(attemptedAt, settings.retryIntervalHours);
     await scanQueue.addBulk(
       rows.map((row) => ({
         name: "scan_http",
         data: { domain: row.domain, assetId: row.id },
-        opts: { ...DEFAULT_JOB_OPTIONS, jobId: `scheduler-scan-${row.id}-${bucket}` },
+        opts: {
+          ...DEFAULT_JOB_OPTIONS,
+          jobId: getAssetScanJobId(row.id, attemptedAt, settings.retryIntervalHours),
+        },
       }))
     );
     await db
@@ -187,6 +195,102 @@ export async function refreshStaleAssets(
       queueDepthBefore: depth,
     });
   }
+  return rows.length;
+}
+
+export function buildUnresolvedRecoveryJobs(
+  rows: Array<{ id: number; domain: string }>,
+  now: Date,
+  retryIntervalHours: number
+) {
+  return rows.map((row) => ({
+    name: "scan_http" as const,
+    data: { domain: row.domain, assetId: row.id },
+    opts: {
+      ...DEFAULT_JOB_OPTIONS,
+      jobId: getAssetScanJobId(row.id, now, retryIntervalHours),
+    },
+  }));
+}
+
+/**
+ * Retry active, valid assets that never produced a live HTTP service. Manual
+ * assets and exact scope roots are selected first; passive discoveries follow
+ * in deliberately small, backpressured batches so dead hosts cannot dominate
+ * the Raspberry Pi.
+ */
+export async function refreshUnresolvedAssets(
+  db: Db,
+  scanQueue: Queue<ScanHttpJob>,
+  settings: SchedulerSettings,
+  downstreamQueues: QueuePressureSource[] = []
+): Promise<number> {
+  const saturated = await findSaturatedQueue(downstreamQueues);
+  if (saturated) {
+    log("info", "Unresolved HTTP recovery paused by downstream backpressure", {
+      queue: saturated.name,
+      queueDepth: saturated.depth,
+      maxQueueDepth: saturated.maxDepth,
+    });
+    return 0;
+  }
+
+  const depth = await getQueueDepth(scanQueue);
+  const available = Math.max(0, settings.maxScanQueueDepth - depth);
+  const limit = Math.min(settings.unresolvedBatchSize, available);
+  if (limit === 0) {
+    log("info", "Unresolved HTTP recovery paused by backpressure", {
+      queueDepth: depth,
+      maxQueueDepth: settings.maxScanQueueDepth,
+    });
+    return 0;
+  }
+
+  const retryBefore = sql`now() - ${`${settings.unresolvedRetryIntervalHours} hours`}::interval`;
+  const commonConditions = [
+    eq(scopes.inScope, true),
+    sql`${assets.domain} ~ ${HOSTNAME_PATTERN}`,
+    eq(assets.resolved, false),
+    isNull(assets.lastScannedAt),
+    or(isNull(assets.lastScanAttemptAt), lt(assets.lastScanAttemptAt, retryBefore)),
+  ];
+  const manualRows = await db
+    .select({ id: assets.id, domain: assets.domain })
+    .from(assets)
+    .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+    .where(and(...commonConditions, eq(assets.source, "manual")))
+    .orderBy(sql`${assets.lastScanAttemptAt} asc nulls first`, assets.id)
+    .limit(limit);
+  const remaining = limit - manualRows.length;
+  const otherRows = remaining > 0
+    ? await db
+        .select({ id: assets.id, domain: assets.domain })
+        .from(assets)
+        .innerJoin(scopes, eq(assets.scopeId, scopes.id))
+        .where(and(...commonConditions, ne(assets.source, "manual")))
+        .orderBy(sql`${assets.lastScanAttemptAt} asc nulls first`, assets.id)
+        .limit(remaining)
+    : [];
+  const rows = [...manualRows, ...otherRows];
+
+  if (rows.length === 0) return 0;
+
+  const attemptedAt = new Date();
+  await scanQueue.addBulk(
+    buildUnresolvedRecoveryJobs(
+      rows,
+      attemptedAt,
+      settings.retryIntervalHours
+    )
+  );
+  await db
+    .update(assets)
+    .set({ lastScanAttemptAt: attemptedAt })
+    .where(inArray(assets.id, rows.map((row) => row.id)));
+
+  log("info", `Queued HTTP recovery for ${rows.length} unresolved asset(s)`, {
+    queueDepthBefore: depth,
+  });
   return rows.length;
 }
 
@@ -444,10 +548,17 @@ export async function runTick(
     refreshEndpointFanout(db, scanQueue, detectTechQueue, settings),
     refreshPendingEndpointAnalyses(db, analyzeQueue, settings),
   ]);
+  const unresolvedCount = await refreshUnresolvedAssets(
+    db,
+    scanQueue,
+    settings,
+    downstreamQueues
+  );
   const scanCount = await refreshStaleAssets(db, scanQueue, settings, downstreamQueues);
   log("info", "Scheduler tick complete", {
     scopesReEnumerated: enumCount,
     assetsReScanned: scanCount,
+    unresolvedAssetsRetried: unresolvedCount,
     endpointAnalysesQueued: endpointAnalyses,
     endpointScansRecovered: endpointRecovery.scans,
     endpointTechnologiesRecovered: endpointRecovery.technologies,

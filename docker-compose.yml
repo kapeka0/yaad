@@ -271,6 +271,8 @@ services:
       SCHEDULER_TICK_MS: ${SCHEDULER_TICK_MS:-900000}
       # Max rows re-enqueued per stage per tick
       SCHEDULER_BATCH_SIZE: ${SCHEDULER_BATCH_SIZE:-500}
+      # Keep unresolved recovery deliberately smaller than normal refreshes.
+      SCHEDULER_UNRESOLVED_BATCH_SIZE: ${SCHEDULER_UNRESOLVED_BATCH_SIZE:-100}
       SCHEDULER_RETRY_INTERVAL_HOURS: ${SCHEDULER_RETRY_INTERVAL_HOURS:-6}
       SCHEDULER_MAX_ENUM_QUEUE: ${SCHEDULER_MAX_ENUM_QUEUE:-10000}
       SCHEDULER_MAX_SCAN_QUEUE: ${SCHEDULER_MAX_SCAN_QUEUE:-10000}
@@ -281,6 +283,8 @@ services:
       RESCAN_ENUM_INTERVAL_HOURS: ${RESCAN_ENUM_INTERVAL_HOURS:-168}
       # Re-scan a known asset (httpx→js→tech) after this many hours (1d)
       RESCAN_HTTP_INTERVAL_HOURS: ${RESCAN_HTTP_INTERVAL_HOURS:-24}
+      # Retry DNS/HTTP-negative assets slowly so dead hosts cannot dominate.
+      RESCAN_UNRESOLVED_INTERVAL_HOURS: ${RESCAN_UNRESOLVED_INTERVAL_HOURS:-168}
     depends_on:
       api:
         condition: service_healthy

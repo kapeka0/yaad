@@ -1,14 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { Queue } from "bullmq";
 import { db as getDbInstance } from "@/lib/db";
-import { getRedisOptions, QUEUES, DEFAULT_JOB_OPTIONS } from "@yaad/queue";
+import {
+  getRedisOptions,
+  QUEUES,
+  DEFAULT_JOB_OPTIONS,
+  getAssetScanJobId,
+  shouldQueueAssetScan,
+} from "@yaad/queue";
+import type { EnumerateSubdomainsJob, ScanHttpJob } from "@yaad/queue";
 import { programs, scopes, assets, type Scope } from "@yaad/db";
-import { sql } from "drizzle-orm";
+import { inArray, sql } from "drizzle-orm";
 import { normalizeAssetDomain } from "@yaad/types";
 
 export const runtime = "nodejs";
 
 export async function POST(req: NextRequest) {
+  let enumerateQueue: Queue<EnumerateSubdomainsJob> | undefined;
+  let scanQueue: Queue<ScanHttpJob> | undefined;
   try {
     const body = await req.json();
     const { name, platform, offersReward, scopes: rawScopes } = body;
@@ -31,8 +40,8 @@ export async function POST(req: NextRequest) {
     const redisOptions = getRedisOptions(redisUrl);
 
     // Instantiate queues
-    const enumerateQueue = new Queue(QUEUES.ENUMERATE_SUBDOMAINS, { connection: redisOptions });
-    const scanQueue = new Queue(QUEUES.SCAN_HTTP, { connection: redisOptions });
+    enumerateQueue = new Queue<EnumerateSubdomainsJob>(QUEUES.ENUMERATE_SUBDOMAINS, { connection: redisOptions });
+    scanQueue = new Queue<ScanHttpJob>(QUEUES.SCAN_HTTP, { connection: redisOptions });
 
     // 1. Upsert program
     const [program] = await dbInstance
@@ -54,6 +63,7 @@ export async function POST(req: NextRequest) {
 
     const importedScopes: Scope[] = [];
     const enqueuedJobsCount = { enumerate: 0, scan: 0 };
+    const scanCandidates = new Map<number, string>();
 
     for (const scopeStr of scopeList) {
       const domain = normalizeAssetDomain(scopeStr);
@@ -102,22 +112,38 @@ export async function POST(req: NextRequest) {
             target: assets.domain,
             set: { scopeId: insertedScope.id, source: "manual", lastSeen: new Date() },
           })
-          .returning({ id: assets.id, isNew: sql<boolean>`(xmax = 0)` });
+          .returning({
+            id: assets.id,
+            resolved: assets.resolved,
+            lastScannedAt: assets.lastScannedAt,
+            isNew: sql<boolean>`(xmax = 0)`,
+          });
 
-        if (asset?.isNew) {
-          await scanQueue.add(
-            "scan_http",
-            { domain, assetId: asset.id },
-            DEFAULT_JOB_OPTIONS
-          );
-          enqueuedJobsCount.scan++;
-        }
+        if (asset && shouldQueueAssetScan(asset)) scanCandidates.set(asset.id, domain);
       }
     }
 
-    // Close queues to free up connections
-    await enumerateQueue.close();
-    await scanQueue.close();
+    if (scanCandidates.size > 0) {
+      const attemptedAt = new Date();
+      const retryIntervalHours =
+        Number.parseInt(process.env.SCHEDULER_RETRY_INTERVAL_HOURS ?? "6", 10) || 6;
+      const candidates = [...scanCandidates.entries()];
+      await scanQueue.addBulk(
+        candidates.map(([assetId, domain]) => ({
+          name: "scan_http",
+          data: { domain, assetId },
+          opts: {
+            ...DEFAULT_JOB_OPTIONS,
+            jobId: getAssetScanJobId(assetId, attemptedAt, retryIntervalHours),
+          },
+        }))
+      );
+      await dbInstance
+        .update(assets)
+        .set({ lastScanAttemptAt: attemptedAt })
+        .where(inArray(assets.id, candidates.map(([assetId]) => assetId)));
+      enqueuedJobsCount.scan = candidates.length;
+    }
 
     return NextResponse.json({
       success: true,
@@ -129,5 +155,10 @@ export async function POST(req: NextRequest) {
     console.error("Failed to import private program:", err);
     const errMsg = err instanceof Error ? err.message : String(err);
     return NextResponse.json({ error: errMsg }, { status: 500 });
+  } finally {
+    await Promise.allSettled([
+      enumerateQueue?.close() ?? Promise.resolve(),
+      scanQueue?.close() ?? Promise.resolve(),
+    ]);
   }
 }

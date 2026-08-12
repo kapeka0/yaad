@@ -163,6 +163,11 @@ wildcard scopes older than `RESCAN_ENUM_INTERVAL_HOURS` get re-enumerated, and
 assets not scanned within `RESCAN_HTTP_INTERVAL_HOURS` get a fresh `scan_http`.
 `SCHEDULER_BATCH_SIZE` caps how many rows are re-queued per tick to avoid
 thundering-herd load.
+Unresolved assets that never completed a scan are retried separately every
+`RESCAN_UNRESOLVED_INTERVAL_HOURS`, in batches capped by
+`SCHEDULER_UNRESOLVED_BATCH_SIZE`. Manual imports and exact scope roots are
+prioritized, while downstream queue limits prevent dead hosts from crowding
+out productive work.
 
 ### `api` (Hono, long-running)
 Runs DB migrations on boot, then serves read queries: assets by technology or

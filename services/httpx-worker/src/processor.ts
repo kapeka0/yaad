@@ -5,6 +5,13 @@ import { DEFAULT_JOB_OPTIONS } from "@yaad/queue";
 import type { ScanHttpJob, CollectJsJob, DetectTechnologyJob } from "@yaad/queue";
 import { sql, eq } from "drizzle-orm";
 import { runHttpx } from "./runner.js";
+import type { HttpxResult } from "./runner.js";
+
+export function requireLiveHttpResults(results: HttpxResult[], domain: string): void {
+  if (results.length === 0) {
+    throw new Error(`No live HTTP service found for ${domain}`);
+  }
+}
 
 export async function processScanHttp(
   job: { data: ScanHttpJob },
@@ -29,7 +36,13 @@ export async function processScanHttp(
 
   console.log(JSON.stringify({ level: "info", msg: `Scanning HTTP for ${domain}` }));
 
+  await db
+    .update(assets)
+    .set({ lastScanAttemptAt: new Date() })
+    .where(eq(assets.id, assetId));
+
   const results = await runHttpx(domain);
+  requireLiveHttpResults(results, domain);
   const downstream: Array<{ serviceId: number; url: string }> = [];
   const failures: Array<{ url: string; error: string }> = [];
   let resolvedIp: string | undefined;
@@ -105,7 +118,8 @@ export async function processScanHttp(
   await db
     .update(assets)
     .set({
-      ...(resolvedIp ? { ip: resolvedIp, resolved: true } : {}),
+      ...(resolvedIp ? { ip: resolvedIp } : {}),
+      resolved: true,
       lastSeen: new Date(),
       lastScannedAt: new Date(),
     })
@@ -113,24 +127,20 @@ export async function processScanHttp(
 }
 
 async function upsertTech(db: Db, assetId: number, name: string): Promise<void> {
-  try {
-    const [tech] = await db
-      .insert(technologies)
-      .values({ name, version: "" })
-      .onConflictDoUpdate({
-        target: [technologies.name, technologies.version],
-        set: {
-          icon: sql`CASE WHEN excluded.icon <> '' THEN excluded.icon ELSE ${technologies.icon} END`,
-        },
-      })
-      .returning();
-    if (tech) {
-      await db
-        .insert(assetTechnologies)
-        .values({ assetId, technologyId: tech.id })
-        .onConflictDoNothing();
-    }
-  } catch {
-    /* ignore */
+  const [tech] = await db
+    .insert(technologies)
+    .values({ name, version: "" })
+    .onConflictDoUpdate({
+      target: [technologies.name, technologies.version],
+      set: {
+        icon: sql`CASE WHEN excluded.icon <> '' THEN excluded.icon ELSE ${technologies.icon} END`,
+      },
+    })
+    .returning();
+  if (tech) {
+    await db
+      .insert(assetTechnologies)
+      .values({ assetId, technologyId: tech.id })
+      .onConflictDoNothing();
   }
 }
