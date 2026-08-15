@@ -302,6 +302,7 @@ services:
       REDIS_URL: redis://redis:6379
       # Backend API (used to proxy /js/grep, which needs MinIO access)
       API_URL: http://api:3000
+      CULTIVATE_API_URL: http://cultivate-api:3000
       NEXT_PUBLIC_ICON_BASE_URL: ${ICON_BASE_URL:-https://zrqvcicitadfkaaklgmg.supabase.co/storage/v1/object/public/tech-icons/}
     depends_on:
       postgres:

@@ -18,21 +18,27 @@ const ICON_BASE =
 const MAX_VISIBLE = 5;
 
 function TechIcon({ tech }: { tech: Tech }) {
-  const [imgFailed, setImgFailed] = useState(false);
-  const [usingLocalFallback, setUsingLocalFallback] = useState(false);
+  const [sourceIndex, setSourceIndex] = useState(0);
   const icon = resolveTechnologyIcon(tech.name, tech.icon);
   const primarySrc = resolveIconUrl(icon, ICON_BASE);
   const localFallbackSrc = tech.icon
     ? resolveIconUrl(tech.icon, "/icons/")
     : "";
-  const src = usingLocalFallback ? localFallbackSrc : primarySrc;
+  const cultivateFallbackSrc = tech.icon
+    ? `/api/technology-icons/${encodeURIComponent(tech.icon)}`
+    : "";
+  const sources = [primarySrc, localFallbackSrc, cultivateFallbackSrc].filter(
+    (source, index, allSources): source is string =>
+      Boolean(source) && allSources.indexOf(source) === index,
+  );
+  const src = sources[sourceIndex];
   const label = `${tech.name}${tech.version ? ` ${tech.version}` : ""}`;
 
   return (
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         <span className="inline-flex shrink-0 items-center justify-center">
-          {src && !imgFailed ? (
+          {src ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img
               src={src}
@@ -42,13 +48,7 @@ function TechIcon({ tech }: { tech: Tech }) {
               loading="lazy"
               decoding="async"
               className="size-4 rounded-sm object-contain"
-              onError={() => {
-                if (!usingLocalFallback && localFallbackSrc && localFallbackSrc !== primarySrc) {
-                  setUsingLocalFallback(true);
-                  return;
-                }
-                setImgFailed(true);
-              }}
+              onError={() => setSourceIndex((current) => current + 1)}
             />
           ) : (
             <Avatar className="size-4 rounded-sm">
@@ -89,7 +89,7 @@ export function TechIcons({ techs }: { techs: Tech[] }) {
     <Tooltip.Provider delayDuration={200}>
       <div className="flex flex-wrap items-center gap-1">
         {visible.map((tech) => (
-          <TechIcon key={tech.id} tech={tech} />
+          <TechIcon key={`${tech.id}:${tech.icon}`} tech={tech} />
         ))}
         {rest.length > 0 && (
           <Tooltip.Root>

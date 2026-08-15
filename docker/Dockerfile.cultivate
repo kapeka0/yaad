@@ -46,7 +46,8 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-ARG CULTIVATE_COMMIT=42754ee2490d4425b117a6ea2e251460496974cc
+ARG CULTIVATE_COMMIT=8b88d55dbf80ed9dd6bd2c2bc5cf0239dc1a668f
+ARG WAPPALYZER_DATA_COMMIT=5e7c47b1d441ded0bd476b252261e87634349f96
 
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
 
@@ -60,16 +61,17 @@ ENV PUPPETEER_MAX_TIMEOUT=45000
 RUN git clone https://github.com/kapeka0/cultivate-api.git . && \
     git checkout --detach "$CULTIVATE_COMMIT"
 
-# Cultivate only destroys Wappalyzer on the success path. Always close Chromium
-# after timeouts/errors as well, otherwise long-running workers leak processes.
-COPY docker/cultivate-api-cleanup.patch /tmp/cultivate-api-cleanup.patch
-RUN git apply /tmp/cultivate-api-cleanup.patch && \
-    rm /tmp/cultivate-api-cleanup.patch
+RUN git clone --filter=blob:none https://github.com/enthec/webappanalyzer.git /tmp/webappanalyzer && \
+    git -C /tmp/webappanalyzer checkout --detach "$WAPPALYZER_DATA_COMMIT" && \
+    WAPPALYZER_DATA_REVISION="$WAPPALYZER_DATA_COMMIT" node scripts/install-wappalyzer-data.js /tmp/webappanalyzer /app && \
+    rm -rf /tmp/webappanalyzer
 
 RUN npm install --omit=dev
+RUN npm test && npm run test:corpus
 
 ENV NODE_ENV=production
 ENV PORT=3000
+ENV WAPPALYZER_DATA_REVISION=${WAPPALYZER_DATA_COMMIT}
 
 EXPOSE 3000
 
