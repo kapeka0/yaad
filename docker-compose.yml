@@ -49,6 +49,8 @@ services:
       MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:-yaadyaad}
     volumes:
       - minio_data:/data
+    # Keep host bindings independent of Tailscale startup. Binding directly to
+    # a Tailscale IP can leave containers permanently stopped after a reboot.
     ports:
       - "9000:9000"
       - "9001:9001"
@@ -100,6 +102,8 @@ services:
       S3_SECRET_KEY: ${S3_SECRET_KEY:-yaadyaad}
       S3_BUCKET: ${S3_BUCKET:-js-blobs}
     ports:
+      # The all-interface bind remains reachable through LAN and Tailscale and
+      # does not race creation of the tailscale0 interface during boot.
       - "3000:3000"
     depends_on:
       postgres:
@@ -296,6 +300,7 @@ services:
     restart: unless-stopped
     logging: *default-logging
     ports:
+      # See the boot-safe binding note on the API service above.
       - "3001:3001"
     environment:
       DATABASE_URL: postgresql://yaad:yaad@postgres:5432/yaad
